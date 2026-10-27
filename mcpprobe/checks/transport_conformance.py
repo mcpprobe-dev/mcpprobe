@@ -406,7 +406,10 @@ class Trans05TlsAndHeaders(Check):
                         excerpt=evidence_summary(
                             [sample],
                             "response headers: "
-                            + (", ".join(f"{k}: {v}" for k, v in sorted(headers.items())[:6]) or "(none kept)")
+                            + (
+                                ", ".join(f"{k}: {v}" for k, v in sorted(headers.items())[:6])
+                                or "(none kept)"
+                            )
                             + "; missing "
                             + ", ".join(missing),
                         ),

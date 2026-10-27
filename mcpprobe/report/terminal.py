@@ -102,7 +102,9 @@ def render(
             sub.append(_plain(f"server={name} {fp.server_info.get('version', '')}".strip(), 60))
     inv = report.inventory_summary
     if inv:
-        sub.append(f"tools={inv.get('tools', 0)} prompts={inv.get('prompts', 0)} resources={inv.get('resources', 0)}")
+        sub.append(
+            f"tools={inv.get('tools', 0)} prompts={inv.get('prompts', 0)} resources={inv.get('resources', 0)}"
+        )
     sub.append(f"mode={report.mode.value}")
     console.print(Panel(header, subtitle=Text(" | ".join(sub)), subtitle_align="left"))
 
@@ -159,10 +161,12 @@ def render(
             Text(f"{report.evidence_count} request/response pairs recorded as evidence.", style="dim")
         )
     if fail_on is not None:
-        worst = report.max_severity()
-        if worst is not None and worst >= fail_on:
+        top = report.max_severity()
+        if top is not None and top >= fail_on:
             console.print(
-                Text(f"Result: FAIL (findings at or above {fail_on.value})", style=severity_style(worst))
+                Text(f"Result: FAIL (findings at or above {fail_on.value})", style=severity_style(top))
             )
         else:
-            console.print(Text(f"Result: PASS (nothing at or above {fail_on.value})", style=f"bold {PASS_HEX}"))
+            console.print(
+                Text(f"Result: PASS (nothing at or above {fail_on.value})", style=f"bold {PASS_HEX}")
+            )

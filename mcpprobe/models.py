@@ -30,22 +30,22 @@ class Severity(str, Enum):
         """Numeric rank so severities can be compared (``info`` = 0)."""
         return _SEVERITY_ORDER.index(self)
 
-    def __ge__(self, other: object) -> bool:  # type: ignore[override]
+    def __ge__(self, other: object) -> bool:
         if not isinstance(other, Severity):
             return NotImplemented
         return self.rank >= other.rank
 
-    def __gt__(self, other: object) -> bool:  # type: ignore[override]
+    def __gt__(self, other: object) -> bool:
         if not isinstance(other, Severity):
             return NotImplemented
         return self.rank > other.rank
 
-    def __le__(self, other: object) -> bool:  # type: ignore[override]
+    def __le__(self, other: object) -> bool:
         if not isinstance(other, Severity):
             return NotImplemented
         return self.rank <= other.rank
 
-    def __lt__(self, other: object) -> bool:  # type: ignore[override]
+    def __lt__(self, other: object) -> bool:
         if not isinstance(other, Severity):
             return NotImplemented
         return self.rank < other.rank

@@ -61,15 +61,13 @@ class RpcResponse:
 
     @property
     def result(self) -> dict[str, Any] | None:
-        if self.message and isinstance(self.message.get("result"), dict):
-            return self.message["result"]
-        return None
+        value = self.message.get("result") if self.message else None
+        return value if isinstance(value, dict) else None
 
     @property
     def rpc_error(self) -> dict[str, Any] | None:
-        if self.message and isinstance(self.message.get("error"), dict):
-            return self.message["error"]
-        return None
+        value = self.message.get("error") if self.message else None
+        return value if isinstance(value, dict) else None
 
     @property
     def ok(self) -> bool:

@@ -11,10 +11,11 @@ from mcpprobe.transport import EvidenceLog
 
 
 def report_to_dict(report: ScanReport, evidence: EvidenceLog | None = None) -> dict[str, Any]:
-    data = report.model_dump(mode="json")
+    data: dict[str, Any] = report.model_dump(mode="json")
+    worst = report.max_severity()
     data["summary"] = {
         "counts": report.counts(),
-        "max_severity": report.max_severity().value if report.max_severity() else None,
+        "max_severity": worst.value if worst is not None else None,
         "checks_ran": sum(1 for c in report.checks if c.status.value == "ran"),
         "checks_skipped": sum(1 for c in report.checks if c.status.value == "skipped"),
         "checks_not_implemented": sum(1 for c in report.checks if c.status.value == "not_implemented"),

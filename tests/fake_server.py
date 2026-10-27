@@ -258,7 +258,9 @@ class FakeMcpServer:
         self._httpd = ThreadingHTTPServer((self.host, self.port), Handler)
         self._httpd.daemon_threads = True
         self.port = self._httpd.server_address[1]
-        self._thread = threading.Thread(target=self._httpd.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True)
+        self._thread = threading.Thread(
+            target=self._httpd.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True
+        )
         self._thread.start()
         return self
 
@@ -331,7 +333,9 @@ class FakeMcpServer:
 
     def _www_authenticate(self) -> str:
         if self.cfg.advertise_prm_in_401:
-            return f'Bearer resource_metadata="{self.base}/.well-known/oauth-protected-resource{self.cfg.path}"'
+            return (
+                f'Bearer resource_metadata="{self.base}/.well-known/oauth-protected-resource{self.cfg.path}"'
+            )
         return "Bearer"
 
     def _rate_limited(self) -> bool:
@@ -508,7 +512,9 @@ class FakeMcpServer:
         if rpc_method == "prompts/list":
             return self._reply({"jsonrpc": "2.0", "id": msg_id, "result": {"prompts": cfg.prompts}}, extra)
         if rpc_method == "resources/list":
-            return self._reply({"jsonrpc": "2.0", "id": msg_id, "result": {"resources": cfg.resources}}, extra)
+            return self._reply(
+                {"jsonrpc": "2.0", "id": msg_id, "result": {"resources": cfg.resources}}, extra
+            )
         if rpc_method == "tools/call":
             with self._lock:
                 self.tool_calls.append(params)

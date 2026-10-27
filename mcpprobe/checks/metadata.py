@@ -81,7 +81,8 @@ class Meta03DangerousCapabilitySurface(Check):
                         confidence=Confidence.MEDIUM,
                         evidence=ev,
                         excerpt=evidence_summary(
-                            ev, f"tools[{name}] description={excerpt(str(tool.get('description', '')), 80)!r} annotations={ann}"
+                            ev,
+                            f"tools[{name}] description={excerpt(str(tool.get('description', '')), 80)!r} annotations={ann}",
                         ),
                         location=f"tools[{name}].annotations",
                         details={

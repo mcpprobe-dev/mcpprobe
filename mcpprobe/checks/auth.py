@@ -93,7 +93,9 @@ class Auth01NoAuthentication(Check):
                 severity=severity,
                 confidence=Confidence.HIGH,
                 evidence=ev,
-                excerpt=evidence_summary(ev, f"no Authorization header sent; {len(names)} tools listed: {shown}"),
+                excerpt=evidence_summary(
+                    ev, f"no Authorization header sent; {len(names)} tools listed: {shown}"
+                ),
                 location=ctx.target,
                 details={"tools": ctx.tool_names(), "dangerous_tools": dangerous, "local": local},
             )
@@ -378,7 +380,7 @@ class Auth04TokenAudienceAndPassthrough(Check):
             "jti": secrets.token_hex(8),
         }
         hs256 = jwt.encode(now_claims, secrets.token_hex(32), algorithm="HS256")
-        alg_none = jwt.encode(now_claims, None, algorithm="none")
+        alg_none = jwt.encode(now_claims, "", algorithm="none")
         header_accepted: list[RpcResponse] = []
         for label, token in (("HS256/random-key", hs256), ("alg=none", alg_none)):
             resp = await http.rpc(

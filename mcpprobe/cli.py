@@ -27,8 +27,8 @@ from mcpprobe.authz import (
 )
 from mcpprobe.checks import ALL_CHECKS, ScanOptions
 from mcpprobe.checks._util import host_of
-from mcpprobe.models import CheckMode, Severity
 from mcpprobe.dnsutil import record_name
+from mcpprobe.models import CheckMode, Severity
 from mcpprobe.policy import DEFAULT_RATE, MAX_RATE, OptOutError
 from mcpprobe.report import render, write_json, write_sarif
 from mcpprobe.scanner import ScanConfig, run_scan
@@ -60,30 +60,83 @@ def _parse_kv(values: Sequence[str], what: str, sep: str) -> dict[str, str]:
 @cli.command("scan")
 @click.argument("target")
 @click.option("--stdio", is_flag=True, help="Treat TARGET as a local command to spawn (stdio transport).")
-@click.option("--env", "env_vars", multiple=True, help="Environment for the stdio server, KEY=VALUE (repeatable).")
-@click.option("--header", "headers", multiple=True, help="Extra HTTP header, 'Name: value' (repeatable), e.g. a bearer token you own.")
-@click.option("--active", is_flag=True, help="Enable active checks. Requires --authorised-by, --scope and --verify.")
+@click.option(
+    "--env", "env_vars", multiple=True, help="Environment for the stdio server, KEY=VALUE (repeatable)."
+)
+@click.option(
+    "--header",
+    "headers",
+    multiple=True,
+    help="Extra HTTP header, 'Name: value' (repeatable), e.g. a bearer token you own.",
+)
+@click.option(
+    "--active", is_flag=True, help="Enable active checks. Requires --authorised-by, --scope and --verify."
+)
 @click.option("--authorised-by", help="Who authorised this scan (name/role/ticket). Required for --active.")
-@click.option("--scope", help="Agreed scope statement, e.g. 'https://host/mcp, read-only tools only'. Required for --active.")
-@click.option("--verify", "verify_method", type=click.Choice(["dns-txt", "local"]), help="Ownership verification method for --active.")
-@click.option("--token", help="Verification token for --verify dns-txt (default: the one saved by 'mcpprobe token').")
-@click.option("--reference", help="Operator reference stored in the authorisation record (ticket, change number).")
-@click.option("--exclude-tool", "excluded_tools", multiple=True, help="Tool names that must never be called (repeatable).")
-@click.option("--rate", default=DEFAULT_RATE, show_default=True, type=click.FloatRange(min=0.1, max=MAX_RATE), help=f"Maximum requests per second (hard ceiling {MAX_RATE:g}).")
+@click.option(
+    "--scope",
+    help="Agreed scope statement, e.g. 'https://host/mcp, read-only tools only'. Required for --active.",
+)
+@click.option(
+    "--verify",
+    "verify_method",
+    type=click.Choice(["dns-txt", "local"]),
+    help="Ownership verification method for --active.",
+)
+@click.option(
+    "--token", help="Verification token for --verify dns-txt (default: the one saved by 'mcpprobe token')."
+)
+@click.option(
+    "--reference", help="Operator reference stored in the authorisation record (ticket, change number)."
+)
+@click.option(
+    "--exclude-tool",
+    "excluded_tools",
+    multiple=True,
+    help="Tool names that must never be called (repeatable).",
+)
+@click.option(
+    "--rate",
+    default=DEFAULT_RATE,
+    show_default=True,
+    type=click.FloatRange(min=0.1, max=MAX_RATE),
+    help=f"Maximum requests per second (hard ceiling {MAX_RATE:g}).",
+)
 @click.option("--timeout", default=15.0, show_default=True, help="Per-request timeout in seconds.")
-@click.option("--fail-on", default="high", type=click.Choice(SEVERITIES), show_default=True, help="Exit 1 if any finding is at or above this severity.")
-@click.option("--json", "json_path", type=click.Path(dir_okay=False), help="Write the JSON report (with evidence) here.")
-@click.option("--sarif", "sarif_path", type=click.Path(dir_okay=False), help="Write a SARIF 2.1.0 report here.")
-@click.option("--sarif-location", help="Repository-relative file to anchor SARIF results to (default: the target URI).")
-@click.option("--baseline", "baseline_path", type=click.Path(dir_okay=False), help="META-02 baseline file to compare against and update.")
+@click.option(
+    "--fail-on",
+    default="high",
+    type=click.Choice(SEVERITIES),
+    show_default=True,
+    help="Exit 1 if any finding is at or above this severity.",
+)
+@click.option(
+    "--json", "json_path", type=click.Path(dir_okay=False), help="Write the JSON report (with evidence) here."
+)
+@click.option(
+    "--sarif", "sarif_path", type=click.Path(dir_okay=False), help="Write a SARIF 2.1.0 report here."
+)
+@click.option(
+    "--sarif-location", help="Repository-relative file to anchor SARIF results to (default: the target URI)."
+)
+@click.option(
+    "--baseline",
+    "baseline_path",
+    type=click.Path(dir_okay=False),
+    help="META-02 baseline file to compare against and update.",
+)
 @click.option("--no-write-baseline", is_flag=True, help="Compare against --baseline but do not overwrite it.")
-@click.option("--no-follow-as", is_flag=True, help="AUTH-03: do not fetch authorization-server metadata on third-party hosts.")
+@click.option(
+    "--no-follow-as",
+    is_flag=True,
+    help="AUTH-03: do not fetch authorization-server metadata on third-party hosts.",
+)
 @click.option("--only", multiple=True, help="Run only these check IDs (repeatable).")
 @click.option("--skip", multiple=True, help="Skip these check IDs (repeatable).")
 @click.option("--insecure", is_flag=True, help="Do not verify the target's TLS certificate.")
 @click.option("--verbose", "-v", is_flag=True, help="Show descriptions and fixes in the terminal summary.")
 @click.option("--quiet", "-q", is_flag=True, help="Suppress the terminal summary.")
-def scan_cmd(  # noqa: PLR0913
+def scan_cmd(
     target: str,
     stdio: bool,
     env_vars: Sequence[str],
@@ -186,9 +239,14 @@ def scan_cmd(  # noqa: PLR0913
     threshold = Severity(fail_on)
     if not quiet:
         render(report, Console(), verbose=verbose, show_evidence=True, fail_on=threshold)
-        for label, path in (("JSON", json_path), ("SARIF", sarif_path), ("authorisation record", report.authorisation_record)):
-            if path:
-                console.print(f"[dim]{label}: {path}[/dim]")
+        outputs = (
+            ("JSON", json_path),
+            ("SARIF", sarif_path),
+            ("authorisation record", report.authorisation_record),
+        )
+        for label, out_path in outputs:
+            if out_path:
+                console.print(f"{label}: {out_path}", style="dim", markup=False, highlight=False)
     worst = report.max_severity()
     sys.exit(EXIT_FINDINGS if worst is not None and worst >= threshold else EXIT_CLEAN)
 
@@ -201,7 +259,9 @@ def checks_cmd(fmt: str) -> None:
         click.echo("| ID | Mode | Default severity | Title | Standards |")
         click.echo("|---|---|---|---|---|")
         for c in ALL_CHECKS:
-            click.echo(f"| {c.id} | {c.mode.value} | {c.severity.value} | {c.title} | {', '.join(c.standards.as_tags()) or '-'} |")
+            click.echo(
+                f"| {c.id} | {c.mode.value} | {c.severity.value} | {c.title} | {', '.join(c.standards.as_tags()) or '-'} |"
+            )
         return
     from rich.table import Table
 
@@ -221,7 +281,7 @@ def token_cmd(host: str) -> None:
     path = save_token(host, token)
     click.echo(f"Saved token for {host} in {path}")
     click.echo("Publish this DNS TXT record, then run with --active --verify dns-txt:")
-    click.echo(f"  {record_name(host)}.  TXT  \"{expected_txt_record(token)}\"")
+    click.echo(f'  {record_name(host)}.  TXT  "{expected_txt_record(token)}"')
 
 
 def main(argv: Sequence[str] | None = None) -> None:

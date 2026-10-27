@@ -83,7 +83,9 @@ def build_transport(config: ScanConfig, evidence: EvidenceLog, limiter: RateLimi
     )
 
 
-async def _list_all(transport: Transport, method: str, key: str) -> tuple[list[dict[str, Any]], str | None, Any]:
+async def _list_all(
+    transport: Transport, method: str, key: str
+) -> tuple[list[dict[str, Any]], str | None, Any]:
     """Paginate a ``*/list`` method; returns (items, error, first evidence)."""
     items: list[dict[str, Any]] = []
     cursor: str | None = None
@@ -116,7 +118,9 @@ async def collect_inventory(transport: Transport, fp: Fingerprint) -> Inventory:
     caps = fp.capabilities if isinstance(fp.capabilities, dict) else {}
     # Only ask for prompts/resources when advertised (or capabilities unknown) to avoid noise.
     if not caps or "prompts" in caps:
-        inv.prompts, inv.prompts_error, inv.prompts_evidence = await _list_all(transport, "prompts/list", "prompts")
+        inv.prompts, inv.prompts_error, inv.prompts_evidence = await _list_all(
+            transport, "prompts/list", "prompts"
+        )
     if not caps or "resources" in caps:
         inv.resources, inv.resources_error, inv.resources_evidence = await _list_all(
             transport, "resources/list", "resources"
@@ -147,7 +151,7 @@ async def run_check(check: Check, ctx: ScanContext) -> CheckResult:
     except PermissionError as exc:
         result.status = CheckStatus.SKIPPED
         result.reason = str(exc)
-    except Exception as exc:  # noqa: BLE001 - a broken check must not kill the scan
+    except Exception as exc:
         result.status = CheckStatus.ERROR
         result.reason = f"{type(exc).__name__}: {exc}"
     result.duration_ms = (time.monotonic() - started) * 1000

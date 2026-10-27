@@ -7,16 +7,17 @@ name = "mcpprobe"
 dynamic = ["version"]
 description = "Security scanner for Model Context Protocol (MCP) servers: auth, transport, tool-metadata and poisoning checks with JSON and SARIF output."
 readme = "README.md"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
-authors = [{ name = "mcpprobe contributors" }]
+authors = [{ name = "mcpprobe contributors", email = "hello@mcpprobe.tech" }]
+maintainers = [{ name = "mcpprobe contributors", email = "hello@mcpprobe.tech" }]
 keywords = ["mcp", "model-context-protocol", "security", "scanner", "sarif", "owasp"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Environment :: Console",
   "Intended Audience :: Developers",
   "Intended Audience :: Information Technology",
-  "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
@@ -34,11 +35,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = [
+dev = [
   "pytest>=8.0",
   "pytest-asyncio>=0.23",
-  "aiohttp>=3.9",
   "ruff>=0.4",
+  "mypy>=1.10",
+  "build>=1.2",
 ]
 
 [project.scripts]
@@ -54,7 +56,15 @@ Issues = "https://github.com/mcpprobe/mcpprobe/issues"
 path = "mcpprobe/__init__.py"
 
 [tool.hatch.build.targets.sdist]
-include = ["/mcpprobe", "/tests", "/README.md", "/CHECKS.md", "/SECURITY.md", "/LICENSE"]
+include = [
+  "/mcpprobe",
+  "/tests",
+  "/README.md",
+  "/CHECKS.md",
+  "/SECURITY.md",
+  "/CHANGELOG.md",
+  "/LICENSE",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["mcpprobe"]
@@ -75,3 +85,14 @@ ignore = ["ANN401", "RUF012", "UP042", "E501"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["ANN", "RUF", "B"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+packages = ["mcpprobe"]
+warn_unreachable = true
+show_error_codes = true
+
+[[tool.mypy.overrides]]
+module = ["dns", "dns.*"]
+ignore_missing_imports = true

@@ -63,7 +63,11 @@ def _rules() -> list[dict[str, Any]]:
                 "help": {
                     "text": (cls.fix or cls.title) + fp_note,
                     "markdown": f"**Fix:** {cls.fix or cls.title}"
-                    + (f"\n\n**False positives:** {cls.false_positive_notes}" if cls.false_positive_notes else ""),
+                    + (
+                        f"\n\n**False positives:** {cls.false_positive_notes}"
+                        if cls.false_positive_notes
+                        else ""
+                    ),
                 },
                 "defaultConfiguration": {"level": LEVEL[cls.severity]},
                 "properties": {
@@ -148,7 +152,9 @@ def to_sarif(report: ScanReport, *, location_uri: str | None = None) -> dict[str
         "toolExecutionNotifications": [
             {
                 "level": "note",
-                "message": {"text": f"{c.check_id}: {c.status.value}" + (f" ({c.reason})" if c.reason else "")},
+                "message": {
+                    "text": f"{c.check_id}: {c.status.value}" + (f" ({c.reason})" if c.reason else "")
+                },
                 "associatedRule": {"id": c.check_id},
             }
             for c in report.checks
@@ -168,7 +174,9 @@ def to_sarif(report: ScanReport, *, location_uri: str | None = None) -> dict[str
                 "properties": {"scanningPolicy": POLICY_URL},
             }
         },
-        "automationDetails": {"id": f"mcpprobe/{report.mode.value}/{report.started_at.strftime('%Y%m%dT%H%M%SZ')}"},
+        "automationDetails": {
+            "id": f"mcpprobe/{report.mode.value}/{report.started_at.strftime('%Y%m%dT%H%M%SZ')}"
+        },
         "invocations": [invocation],
         "results": [_result(f, rule_index, uri) for f in report.findings],
         "properties": _strip_nulls(
@@ -214,7 +222,7 @@ def _message_ok(msg: Any) -> bool:
     return isinstance(msg, dict) and (isinstance(msg.get("text"), str) or isinstance(msg.get("id"), str))
 
 
-def validate_sarif(doc: Any) -> list[str]:  # noqa: C901, PLR0912
+def validate_sarif(doc: Any) -> list[str]:
     """Return a list of problems (empty when the log satisfies the checked SARIF 2.1.0 rules)."""
     p: list[str] = []
     if not isinstance(doc, dict):
@@ -292,10 +300,15 @@ def validate_sarif(doc: Any) -> list[str]:  # noqa: C901, PLR0912
                 if phys is None:
                     continue
                 art = phys.get("artifactLocation")
-                if not (isinstance(art, dict) and isinstance(art.get("uri"), str) and art["uri"]) and "address" not in phys:
+                if (
+                    not (isinstance(art, dict) and isinstance(art.get("uri"), str) and art["uri"])
+                    and "address" not in phys
+                ):
                     p.append(f"{rw}.locations[{li}].physicalLocation needs artifactLocation.uri")
                 region = phys.get("region")
-                if region is not None and (not isinstance(region.get("startLine", 1), int) or region.get("startLine", 1) < 1):
+                if region is not None and (
+                    not isinstance(region.get("startLine", 1), int) or region.get("startLine", 1) < 1
+                ):
                     p.append(f"{rw}.locations[{li}].region.startLine must be >= 1")
             pf = res.get("partialFingerprints")
             if pf is not None and not all(isinstance(v, str) for v in pf.values()):
@@ -303,4 +316,12 @@ def validate_sarif(doc: Any) -> list[str]:  # noqa: C901, PLR0912
     return p
 
 
-__all__ = ["LEVEL", "SARIF_SCHEMA", "SARIF_VERSION", "SECURITY_SEVERITY", "to_sarif", "validate_sarif", "write_sarif"]
+__all__ = [
+    "LEVEL",
+    "SARIF_SCHEMA",
+    "SARIF_VERSION",
+    "SECURITY_SEVERITY",
+    "to_sarif",
+    "validate_sarif",
+    "write_sarif",
+]

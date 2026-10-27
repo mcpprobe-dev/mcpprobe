@@ -119,9 +119,8 @@ def save_token(host: str, token: str, path: Path | None = None) -> Path:
 
 def load_token(host: str, path: Path | None = None) -> str | None:
     entry = _load_store(path or token_store_path()).get(host.lower())
-    if isinstance(entry, dict) and isinstance(entry.get("token"), str):
-        return entry["token"]
-    return None
+    token = entry.get("token") if isinstance(entry, dict) else None
+    return token if isinstance(token, str) else None
 
 
 def token_fingerprint(token: str) -> str:
@@ -199,9 +198,21 @@ def authorise(
     mode = CheckMode.ACTIVE if active else CheckMode.PASSIVE
     fingerprint: str | None = None
     if not active:
-        verification = VerificationResult(method="none", verified=False, detail="passive mode; no verification")
-        return _record(target, transport, mode, authorised_by, scope, reference, verification,
-                       excluded_tools, rate_cap_rps, None)
+        verification = VerificationResult(
+            method="none", verified=False, detail="passive mode; no verification"
+        )
+        return _record(
+            target,
+            transport,
+            mode,
+            authorised_by,
+            scope,
+            reference,
+            verification,
+            excluded_tools,
+            rate_cap_rps,
+            None,
+        )
 
     missing = [name for name, value in (("--authorised-by", authorised_by), ("--scope", scope)) if not value]
     if missing:
@@ -223,8 +234,18 @@ def authorise(
         verification = verify_dns_txt(host, token, lookup)
     if not verification.verified:
         raise AuthorisationError(f"ownership verification failed: {verification.detail}")
-    return _record(target, transport, mode, authorised_by, scope, reference, verification,
-                   excluded_tools, rate_cap_rps, fingerprint)
+    return _record(
+        target,
+        transport,
+        mode,
+        authorised_by,
+        scope,
+        reference,
+        verification,
+        excluded_tools,
+        rate_cap_rps,
+        fingerprint,
+    )
 
 
 def _record(
