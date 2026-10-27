@@ -1,6 +1,7 @@
 """A small asyncio token-bucket rate limiter.
 
-The default scan budget is 5 requests per second. Every outbound request the
+The default scan budget is 5 requests per second with a burst of one, so the
+cap also holds within any one-second window. Every outbound request the
 scanner makes (including well-known lookups and opt-out checks) passes through
 one limiter so the cap is global, not per check.
 """
@@ -20,7 +21,7 @@ class RateLimiter:
         if rate <= 0:
             raise ValueError("rate must be positive")
         self.rate = float(rate)
-        self.capacity = float(burst if burst is not None else max(1, int(rate)))
+        self.capacity = float(burst if burst is not None else 1)
         self._tokens = self.capacity
         self._updated = time.monotonic()
         self._lock = asyncio.Lock()

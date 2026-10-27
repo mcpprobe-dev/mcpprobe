@@ -120,3 +120,33 @@ async def test_auth_checks_skipped_for_stdio():
     report = await run(stdio_command(), stdio=True, only=["AUTH-01", "AUTH-02", "AUTH-04"])
     for cid in ("AUTH-01", "AUTH-02", "AUTH-04"):
         assert status_of(report, cid).status.value == "skipped"
+
+
+async def test_auth03_honours_third_party_opt_out(make_server, monkeypatch):
+    import httpx
+
+    issuer = "https://auth.example.test"
+    contacted: list[str] = []
+    real_send = httpx.AsyncClient.send
+
+    async def guard(self, request, **kw):
+        contacted.append(request.url.host)
+        assert request.url.host != "auth.example.test", "opted-out AS host was contacted"
+        return await real_send(self, request, **kw)
+
+    monkeypatch.setattr(httpx.AsyncClient, "send", guard)
+
+    def lookup(name):
+        return ["mcpprobe-opt-out=all"] if name == "_mcpprobe.auth.example.test" else []
+
+    async with make_server(require_auth=True, prm_authorization_servers=[issuer]) as srv:
+        report = await run(srv.url, only=["AUTH-02", "AUTH-03"], txt_lookup=lookup)
+    assert by_id(report, "AUTH-03") == []
+    assert any("auth.example.test has opted out" in n for n in report.notes)
+    assert "auth.example.test" not in contacted
+
+
+async def test_auth03_no_follow_third_party(make_server):
+    async with make_server(require_auth=True, prm_authorization_servers=["https://auth.example.test"]) as srv:
+        report = await run(srv.url, only=["AUTH-02", "AUTH-03"], follow_authorization_server=False)
+    assert any("--no-follow-as" in n for n in report.notes)

@@ -168,6 +168,8 @@ async def run_scan(config: ScanConfig) -> tuple[ScanReport, EvidenceLog]:
     started = utcnow()
     transport = build_transport(config, evidence, limiter)
     options = config.options
+    if options.txt_lookup is None:
+        options.txt_lookup = config.txt_lookup
     if config.stdio:
         options.stdio_command = list(transport.argv)  # type: ignore[attr-defined]
         options.stdio_env = dict(config.stdio_env)

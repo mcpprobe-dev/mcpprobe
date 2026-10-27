@@ -287,5 +287,5 @@ async def test_default_rate_is_enforced_by_limiter(make_server):
         await run_scan(cfg)
         elapsed = time.monotonic() - start
         n = len(srv.requests)
-    # burst of 10 tokens, then 10/s: n requests need at least (n - 10) / 10 seconds
-    assert elapsed >= max(0.0, (n - 10) / 10) - 0.05
+    # burst of one token, then 10/s: n requests need at least (n - 1) / 10 seconds
+    assert n > 5 and elapsed >= (n - 1) / 10 - 0.05

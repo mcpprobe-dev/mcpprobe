@@ -87,3 +87,24 @@ def test_main_accepts_options_before_target():
     with pytest.raises(SystemExit) as exc:
         main(["--version"])
     assert exc.value.code == 0
+
+
+@pytest.mark.parametrize(
+    "module",
+    [
+        "mcpprobe.policy",
+        "mcpprobe.authz",
+        "mcpprobe.checks",
+        "mcpprobe.cli",
+        "mcpprobe.scanner",
+        "mcpprobe.report",
+        "mcpprobe.action",
+        "mcpprobe.transport",
+    ],
+)
+def test_each_module_imports_first(module):
+    """Guards against import cycles that only appear depending on import order."""
+    import subprocess
+    import sys
+
+    subprocess.run([sys.executable, "-c", f"import {module}"], check=True, cwd=ROOT)

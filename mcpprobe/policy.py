@@ -19,9 +19,10 @@
 from __future__ import annotations
 
 import asyncio
+from typing import TYPE_CHECKING
+from urllib.parse import urlsplit, urlunsplit
 
 from mcpprobe import POLICY_URL, USER_AGENT
-from mcpprobe.checks._util import host_of, origin_of
 from mcpprobe.dnsutil import (
     DnsLookupError,
     TxtLookup,
@@ -29,9 +30,22 @@ from mcpprobe.dnsutil import (
     has_public_dns_name,
     record_name,
 )
-from mcpprobe.transport import HttpTransport
+
+if TYPE_CHECKING:  # avoid an import cycle: checks -> policy -> transport
+    from mcpprobe.transport import HttpTransport
 
 OPT_OUT_PATH = "/.well-known/mcpprobe-opt-out"
+
+
+def origin_of(url: str) -> str:
+    parts = urlsplit(url)
+    return urlunsplit((parts.scheme, parts.netloc, "", "", ""))
+
+
+def host_of(url: str) -> str:
+    return urlsplit(url).hostname or ""
+
+
 OPT_OUT_TXT = "mcpprobe-opt-out=all"
 #: Hard ceiling on requests per second, whatever the operator asks for.
 MAX_RATE = 10.0

@@ -159,6 +159,7 @@ class FakeConfig:
     security_headers: bool = True
     opt_out: bool = False
     list_changed: bool = False
+    prm_authorization_servers: list[str] | None = None  # default: this server
     slow_large_ms: int = 0  # sleep this long when a request is over the size limit
     crash_on_deep_nesting: bool = False
 
@@ -377,7 +378,7 @@ class FakeMcpServer:
         return self._json(
             {
                 "resource": self.url,
-                "authorization_servers": [self.base],
+                "authorization_servers": self.cfg.prm_authorization_servers or [self.base],
                 "scopes_supported": ["mcp:tools"],
                 "bearer_methods_supported": ["header"],
             }

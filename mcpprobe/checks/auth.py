@@ -25,6 +25,7 @@ from mcpprobe.checks._util import (
 from mcpprobe.checks.base import Check, ScanContext, evidence_of, evidence_summary
 from mcpprobe.checks.capability import classify_tools
 from mcpprobe.models import Confidence, Finding, Severity, Standards
+from mcpprobe.policy import OptOutError, check_dns_opt_out
 from mcpprobe.transport import PROTOCOL_2025_11_25, PROTOCOL_2026_07_28, RpcResponse
 from mcpprobe.transport.base import CLIENT_INFO
 
@@ -251,9 +252,21 @@ class Auth03AuthorizationServerMetadata(Check):
         findings: list[Finding] = []
         target_host = host_of(ctx.target)
         for issuer in servers[:3]:
-            if host_of(issuer) != target_host and not ctx.options.follow_authorization_server:
-                ctx.notes.append(f"AUTH-03: not fetching third-party AS metadata ({issuer}) (--no-follow-as)")
-                continue
+            issuer_host = host_of(issuer)
+            if issuer_host != target_host:
+                if not ctx.options.follow_authorization_server:
+                    ctx.notes.append(
+                        f"AUTH-03: not fetching third-party AS metadata ({issuer}) (--no-follow-as)"
+                    )
+                    continue
+                # A different host gets the same courtesy as the target: honour its opt-out first.
+                try:
+                    ctx.notes.extend(await check_dns_opt_out(issuer_host, ctx.options.txt_lookup))
+                except OptOutError:
+                    ctx.notes.append(
+                        f"AUTH-03: {issuer_host} has opted out of mcpprobe; AS metadata not fetched"
+                    )
+                    continue
             responses: list[RpcResponse] = []
             doc: dict[str, Any] | None = None
             for url in _as_metadata_urls(issuer):

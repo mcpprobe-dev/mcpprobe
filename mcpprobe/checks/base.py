@@ -60,6 +60,8 @@ class ScanOptions:
     stdio_env: dict[str, str] = field(default_factory=dict)
     stdio_command: list[str] = field(default_factory=list)
     timeout: float = 15.0
+    #: DNS TXT resolver used for opt-out checks on third-party hosts (injected in tests).
+    txt_lookup: Callable[[str], list[str]] | None = None
 
 
 class ScanContext:
