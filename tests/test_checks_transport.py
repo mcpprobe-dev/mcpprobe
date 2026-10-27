@@ -123,5 +123,7 @@ async def test_trans05_headers_present(make_server):
 async def test_trans_checks_skipped_for_stdio():
     from tests.conftest import stdio_command
 
-    report = await run(stdio_command(), stdio=True, only=["TRANS-01", "TRANS-02", "TRANS-03", "TRANS-04", "TRANS-05"])
+    report = await run(
+        stdio_command(), stdio=True, only=["TRANS-01", "TRANS-02", "TRANS-03", "TRANS-04", "TRANS-05"]
+    )
     assert {status_of(report, c).status.value for c in ("TRANS-01", "TRANS-05")} == {"skipped"}

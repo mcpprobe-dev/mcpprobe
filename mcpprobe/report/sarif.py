@@ -239,9 +239,11 @@ def validate_sarif(doc: Any) -> list[str]:
             p.append(f"{where} must be an object")
             continue
         driver = (run.get("tool") or {}).get("driver") if isinstance(run.get("tool"), dict) else None
-        if not isinstance(driver, dict) or not isinstance(driver.get("name"), str) or not driver["name"]:
-            p.append(f"{where}.tool.driver.name is required")
+        if not isinstance(driver, dict):
+            p.append(f"{where}.tool.driver is required")
             driver = {}
+        if not isinstance(driver.get("name"), str) or not driver["name"]:
+            p.append(f"{where}.tool.driver.name is required")
         rules = driver.get("rules", [])
         if not isinstance(rules, list):
             p.append(f"{where}.tool.driver.rules must be an array")

@@ -23,7 +23,9 @@ def make_server() -> Callable[..., Any]:
     """Async factory: ``async with make_server(require_auth=True) as srv``."""
 
     @asynccontextmanager
-    async def _factory(preset: str = "secure", host: str = "127.0.0.1", **overrides: Any) -> AsyncIterator[FakeMcpServer]:
+    async def _factory(
+        preset: str = "secure", host: str = "127.0.0.1", **overrides: Any
+    ) -> AsyncIterator[FakeMcpServer]:
         async with FakeMcpServer(make_config(preset, **overrides), host=host) as srv:
             yield srv
 
@@ -35,7 +37,9 @@ def live_server() -> Callable[..., Any]:
     """Sync factory for CLI tests: ``with live_server("vulnerable") as srv``."""
 
     @contextmanager
-    def _factory(preset: str = "secure", host: str = "127.0.0.1", **overrides: Any) -> Iterator[FakeMcpServer]:
+    def _factory(
+        preset: str = "secure", host: str = "127.0.0.1", **overrides: Any
+    ) -> Iterator[FakeMcpServer]:
         srv = FakeMcpServer(make_config(preset, **overrides), host=host).start()
         try:
             yield srv

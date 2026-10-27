@@ -99,7 +99,9 @@ def test_gate_rejects_ip_literal():
 def test_gate_uses_saved_token(tmp_path):
     store = tmp_path / "t.json"
     save_token(HOST, TOKEN, store)
-    rec = _auth(token=None, token_store=store, lookup=txt({f"_mcpprobe.{HOST}": [expected_txt_record(TOKEN)]}))
+    rec = _auth(
+        token=None, token_store=store, lookup=txt({f"_mcpprobe.{HOST}": [expected_txt_record(TOKEN)]})
+    )
     assert rec.verified
     with pytest.raises(AuthorisationError, match="no verification token"):
         _auth(token=None, token_store=tmp_path / "empty.json", lookup=txt({}))
@@ -171,8 +173,14 @@ async def test_active_stubs_run_only_with_verified_record(make_server):
 
 async def test_forged_unverified_record_is_refused(make_server):
     rec = authorise(
-        target="x", transport="stdio", host="", active=True, authorised_by="a", scope="b",
-        verify_method="local", rate_cap_rps=5,
+        target="x",
+        transport="stdio",
+        host="",
+        active=True,
+        authorised_by="a",
+        scope="b",
+        verify_method="local",
+        rate_cap_rps=5,
     )
     rec.verification.verified = False  # tampered
     report = await run(stdio_command(), stdio=True, only=["INJ-01"], authorisation=rec, mode=CheckMode.ACTIVE)

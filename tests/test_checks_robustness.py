@@ -10,7 +10,9 @@ from tests.conftest import by_id, run, stdio_command
 
 
 def test_err01_body_inspection():
-    assert "python traceback" in inspect_error_body('Traceback (most recent call last):\n  File "/x.py", line 1')
+    assert "python traceback" in inspect_error_body(
+        'Traceback (most recent call last):\n  File "/x.py", line 1'
+    )
     assert "javascript stack" in inspect_error_body("at handler (/app/server.js:10:5)")
     assert "framework version" in inspect_error_body("served by express/4.18.2")
     assert inspect_error_body('{"error":{"code":-32601,"message":"Method not found"}}') == []
