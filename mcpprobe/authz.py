@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import ipaddress
 import json
 import os
 import secrets
@@ -136,6 +137,12 @@ def verify_dns_txt(host: str, token: str, lookup: TxtLookup | None = None) -> Ve
     """Check for ``mcpprobe-verification=<token>`` at ``_mcpprobe.<host>``."""
     if not host:
         return VerificationResult(method="dns-txt", verified=False, detail="target has no host name")
+    if _is_ip_literal(host):
+        return VerificationResult(
+            method="dns-txt",
+            verified=False,
+            detail=f"{host} is an IP address; DNS TXT verification needs a host name you control",
+        )
     resolver = lookup or default_txt_lookup
     expected = expected_txt_record(token)
     name = record_name(host)
@@ -156,6 +163,14 @@ def verify_dns_txt(host: str, token: str, lookup: TxtLookup | None = None) -> Ve
         detail=f"no TXT record {TXT_PREFIX}<token> matching the saved token found at {name}",
         evidence=snapshot,
     )
+
+
+def _is_ip_literal(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        return False
+    return True
 
 
 def verify_local(transport: str) -> VerificationResult:

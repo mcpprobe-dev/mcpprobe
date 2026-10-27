@@ -265,7 +265,7 @@ def analyse_text(text: str, *, other_tool_names: Sequence[str] = (), own_name: s
     for name in other_tool_names:
         if not name or name == own_name or len(name) < 3:
             continue
-        if re.search(rf"(?<![\w.]){re.escape(name.lower())}(?![\w.])", lowered):
+        if re.search(rf"(?<![\w.]){re.escape(name.lower())}(?!\w)(?!\.\w)", lowered):
             refs.append(name)
     if refs:
         shadowing = bool(_SHADOW_CONTEXT.search(text))
@@ -398,7 +398,7 @@ class Meta01ToolDescriptionPoisoning(Check):
         "Legitimate guidance such as 'IMPORTANT: call authenticate before this tool' matches the "
         "markup and prerequisite heuristics at medium confidence. URLs to documentation and "
         "mentions of sibling tools without behaviour-modifying words are reported at low severity. "
-        "Review the matched excerpts; use --judge to attach a second-opinion scorer."
+        "Review the matched excerpts; a second-opinion judge can be plugged in through the Python API (ScanOptions.judge); mcpprobe itself makes no LLM calls."
     )
     fix = (
         "Remove any text addressed to the model rather than describing the tool. Keep descriptions "

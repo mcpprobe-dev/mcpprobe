@@ -253,7 +253,7 @@ class Meta05SecretsInMetadata(Check):
     )
     evidence_type = "The listing response that contained the match; values redacted."
     false_positive_notes = (
-        "Example keys in documentation (AKIAIOSFODNN7EXAMPLE and friends) match the AWS pattern. "
+        "Example keys from vendor documentation (for instance the AWS sample key IDs ending in EXAMPLE) match the patterns. "
         "High-entropy strings are reported at Low severity and low confidence; identifiers such "
         "as content hashes trigger them. Secrets in a stdio server's environment are expected "
         "(the spec says stdio servers take credentials from the environment) and are reported "
