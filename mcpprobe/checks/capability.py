@@ -76,7 +76,7 @@ _RULES: list[tuple[str, re.Pattern[str]]] = [
         "email",
         re.compile(
             r"\b(e-?mail|smtp|send_?(mail|message|sms|slack|notification)|"
-            r"bcc|cc|recipient|inbox|gmail|outlook)\b",
+            r"bcc|cc|recipient|inbox|mailbox)\b",
             re.I,
         ),
     ),
