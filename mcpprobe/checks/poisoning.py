@@ -445,6 +445,7 @@ class Meta01ToolDescriptionPoisoning(Check):
                     severity=severity,
                     confidence=confidence,
                     evidence=[ev] if ev else [],
+                    excerpt=f'{item.path}: "{excerpt(item.text, 240)}"',
                     location=item.path,
                     details={
                         "indicators": [

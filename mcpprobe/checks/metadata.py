@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
 from mcpprobe.checks._util import excerpt, shannon_entropy
-from mcpprobe.checks.base import Check, ScanContext
+from mcpprobe.checks.base import Check, ScanContext, evidence_summary
 from mcpprobe.checks.capability import DANGEROUS_CLASSES, Classification, classify_tools
 from mcpprobe.checks.poisoning import collect_text_items
-from mcpprobe.models import Confidence, Finding, Severity, Standards
+from mcpprobe.models import Confidence, EvidenceRecord, Finding, Severity, Standards
+from mcpprobe.redact import SECRET_PATTERNS, redact, redact_secrets
 
 TOOL_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 RISKY_ARG_NAME = re.compile(
@@ -78,6 +80,9 @@ class Meta03DangerousCapabilitySurface(Check):
                         severity=Severity.MEDIUM,
                         confidence=Confidence.MEDIUM,
                         evidence=ev,
+                        excerpt=evidence_summary(
+                            ev, f"tools[{name}] description={excerpt(str(tool.get('description', '')), 80)!r} annotations={ann}"
+                        ),
                         location=f"tools[{name}].annotations",
                         details={
                             "classes": cls.classes,
@@ -102,6 +107,9 @@ class Meta03DangerousCapabilitySurface(Check):
                     severity=Severity.LOW,
                     confidence=Confidence.MEDIUM,
                     evidence=ev,
+                    excerpt=evidence_summary(
+                        ev, "; ".join(f"{c}: {', '.join(sorted(ns))}" for c, ns in sorted(by_class.items()))
+                    ),
                     location="tools",
                     details={"by_class": by_class},
                 )
@@ -173,6 +181,9 @@ class Meta04SchemaHygiene(Check):
                         else Severity.LOW,
                         confidence=Confidence.HIGH,
                         evidence=ev,
+                        excerpt=evidence_summary(
+                            ev, f"tools[{name}].inputSchema = {excerpt(json.dumps(schema), 160)}"
+                        ),
                         location=f"tools[{name}]",
                         details={"problems": problems, "risky_arguments": risky},
                     )
@@ -194,60 +205,15 @@ class Meta04SchemaHygiene(Check):
 
 
 # ----------------------------------------------------------------------------- META-05
-_SECRET_PATTERNS: list[tuple[str, re.Pattern[str], Severity]] = [
-    (
-        "private key block",
-        re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY(?: BLOCK)?-----"),
-        Severity.HIGH,
-    ),
-    ("AWS access key id", re.compile(r"(?<![A-Z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Z0-9])"), Severity.HIGH),
-    (
-        "GitHub token",
-        re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{30,}\b|\bgithub_pat_[A-Za-z0-9_]{22,}\b"),
-        Severity.HIGH,
-    ),
-    ("Slack token", re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"), Severity.HIGH),
-    ("Stripe key", re.compile(r"\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}\b"), Severity.HIGH),
-    ("Google API key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"), Severity.HIGH),
-    ("generic sk- API key", re.compile(r"\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b"), Severity.HIGH),
-    (
-        "JWT",
-        re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b"),
-        Severity.MEDIUM,
-    ),
-    ("bearer token", re.compile(r"\bbearer\s+([A-Za-z0-9\-._~+/]{20,}=*)", re.I), Severity.MEDIUM),
-    (
-        "connection string with password",
-        re.compile(
-            r"\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp|mssql)://[^:\s/]+:[^@\s]+@", re.I
-        ),
-        Severity.HIGH,
-    ),
-    (
-        "credential assignment",
-        re.compile(
-            r"\b(?:api[_-]?key|secret(?:[_-]?key)?|token|password|passwd|pwd|auth[_-]?key|access[_-]?key|client[_-]?secret)\b"
-            r"\s*[:=]\s*['\"]?([A-Za-z0-9_\-/+=.]{16,})",
-            re.I,
-        ),
-        Severity.MEDIUM,
-    ),
-]
 _ENTROPY_TOKEN = re.compile(r"(?<![\w/+=-])[A-Za-z0-9_\-/+=]{24,}(?![\w/+=-])")
 _SECRET_ENV_NAME = re.compile(r"(key|secret|token|password|passwd|pwd|credential|auth)", re.I)
-
-
-def redact(value: str) -> str:
-    if len(value) <= 8:
-        return "*" * len(value)
-    return f"{value[:4]}…{value[-2:]} ({len(value)} chars)"
 
 
 def find_secrets(text: str) -> list[dict[str, Any]]:
     """Return pattern and entropy hits in ``text`` (values redacted)."""
     hits: list[dict[str, Any]] = []
     covered: list[tuple[int, int]] = []
-    for label, pattern, sev in _SECRET_PATTERNS:
+    for label, pattern, sev in SECRET_PATTERNS:
         for m in pattern.finditer(text):
             value = m.group(1) if m.lastindex else m.group(0)
             hits.append({"kind": label, "severity": sev.value, "value": redact(value), "confidence": "high"})
@@ -356,24 +322,19 @@ class Meta05SecretsInMetadata(Check):
                 )
         return findings
 
-    def _finding_for(self, path: str, hits: list[dict[str, Any]], text: str, ev: Any) -> Finding:
+    def _finding_for(
+        self, path: str, hits: list[dict[str, Any]], text: str, ev: EvidenceRecord | None
+    ) -> Finding:
         top = max((Severity(h["severity"]) for h in hits), key=lambda s: s.rank)
         confidence = Confidence.HIGH if any(h["confidence"] == "high" for h in hits) else Confidence.LOW
         return self.finding(
             description=f"{path} contains: "
             + "; ".join(f"{h['kind']} {h['value']}" for h in hits)
-            + f'. Excerpt: "{excerpt(_redact_all(text, hits))}"',
+            + f'. Excerpt: "{excerpt(redact_secrets(text))}"',
             severity=top,
             confidence=confidence,
             evidence=[ev] if ev else [],
+            excerpt=f'{path}: "{excerpt(redact_secrets(text), 240)}"',
             location=path,
             details={"hits": hits},
         )
-
-
-def _redact_all(text: str, hits: list[dict[str, Any]]) -> str:
-    """Best-effort redaction of matched secrets inside an excerpt."""
-    out = text
-    for _label, pattern, _sev in _SECRET_PATTERNS:
-        out = pattern.sub(lambda m: redact(m.group(1) if m.lastindex else m.group(0)), out)
-    return out

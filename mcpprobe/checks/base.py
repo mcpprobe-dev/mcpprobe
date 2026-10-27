@@ -142,8 +142,14 @@ class Check(abc.ABC):
         fix: str | None = None,
         details: dict[str, Any] | None = None,
         title: str | None = None,
+        excerpt: str | None = None,
     ) -> Finding:
-        """Build a :class:`Finding` pre-filled from the check's metadata."""
+        """Build a :class:`Finding` pre-filled from the check's metadata.
+
+        ``excerpt`` overrides the evidence excerpt that is otherwise derived from
+        the first evidence record.
+        """
+        records = [e for e in (evidence or []) if e is not None]
         return Finding(
             id=self.id,
             title=title or self.title,
@@ -152,7 +158,8 @@ class Check(abc.ABC):
             standards=self.standards,
             description=description,
             fix=fix or self.fix,
-            evidence=[e for e in (evidence or []) if e is not None],
+            evidence=records,
+            evidence_excerpt=excerpt if excerpt is not None else evidence_excerpt(records),
             location=location,
             details=details or {},
             false_positive_notes=self.false_positive_notes or None,
@@ -176,6 +183,37 @@ class ActiveCheck(Check):
     def require_active(ctx: ScanContext) -> None:
         if not ctx.active_allowed:
             raise PermissionError("active check requires --active with a verified authorisation record")
+
+
+EXCERPT_BODY_CHARS = 240
+
+
+def evidence_excerpt(records: list[EvidenceRecord]) -> str:
+    """One-line summary of the first evidence record: request, status and a body snippet."""
+    if not records:
+        return ""
+    rec = records[0]
+    head = rec.method
+    if rec.url and rec.transport == "http":
+        head += f" {rec.url}"
+    if rec.status is not None:
+        head += f" -> HTTP {rec.status}"
+    elif rec.error:
+        head += f" -> {rec.error}"
+    body = " ".join(rec.response_body.split())
+    if len(body) > EXCERPT_BODY_CHARS:
+        body = body[: EXCERPT_BODY_CHARS - 1] + "\u2026"
+    extra = f" (+{len(records) - 1} more)" if len(records) > 1 else ""
+    return f"[{rec.id}] {head}" + (f": {body}" if body else "") + extra
+
+
+def evidence_summary(records: list[EvidenceRecord], summary: str) -> str:
+    """``[ev-0005] tools/list -> HTTP 200: <summary>`` for checks that know what matters."""
+    if not records:
+        return summary
+    rec = records[0]
+    head = rec.method + (f" -> HTTP {rec.status}" if rec.status is not None else "")
+    return f"[{rec.id}] {head}: {summary}"
 
 
 def evidence_of(*responses: Any) -> list[EvidenceRecord]:

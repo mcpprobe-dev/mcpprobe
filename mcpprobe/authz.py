@@ -6,10 +6,10 @@ Active checks call tools or send probe payloads, so they are allowed only when:
    agreed scope (``--scope``), **and**
 2. ownership verification passes:
 
-   * ``dns-txt``: a TXT record ``mcpprobe-verification=<token>`` exists on the
-     target host (or ``_mcpprobe-challenge.<host>``). The token is generated
-     locally with ``mcpprobe token <host>`` and stored under the user's config
-     directory, or supplied with ``--token``.
+   * ``dns-txt``: a TXT record ``mcpprobe-verification=<token>`` exists at
+     ``_mcpprobe.<host>``. The token is generated locally with
+     ``mcpprobe token <host>`` and stored under the user's config directory, or
+     supplied with ``--token``.
    * ``local``: only for stdio targets, which the operator runs on their own
      machine.
 
@@ -30,21 +30,18 @@ import hashlib
 import json
 import os
 import secrets
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 from mcpprobe import __version__
+from mcpprobe.dnsutil import DnsLookupError, TxtLookup, default_txt_lookup, record_name
 from mcpprobe.models import CheckMode, utcnow
 
 TXT_PREFIX = "mcpprobe-verification="
-CHALLENGE_LABEL = "_mcpprobe-challenge"
 VERIFY_METHODS = ("dns-txt", "local")
-
-#: Resolver signature: name -> list of TXT strings. Injected in tests.
-TxtLookup = Callable[[str], list[str]]
 
 
 class AuthorisationError(Exception):
@@ -136,50 +133,29 @@ def expected_txt_record(token: str) -> str:
 
 
 # ------------------------------------------------------------------------- verifiers
-def default_txt_lookup(name: str) -> list[str]:
-    """Resolve TXT records with dnspython; returns [] on NXDOMAIN/no answer."""
-    import dns.exception
-    import dns.resolver
-
-    try:
-        answers = dns.resolver.resolve(name, "TXT", lifetime=5.0)
-    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.resolver.NoNameservers):
-        return []
-    except dns.exception.DNSException as exc:
-        raise AuthorisationError(f"DNS lookup failed for {name}: {exc}") from exc
-    out: list[str] = []
-    for rdata in answers:
-        strings = getattr(rdata, "strings", None)
-        if strings is None:
-            out.append(str(rdata).strip('"'))
-        else:
-            out.append(b"".join(strings).decode("utf-8", errors="replace"))
-    return out
-
-
 def verify_dns_txt(host: str, token: str, lookup: TxtLookup | None = None) -> VerificationResult:
-    """Check ``mcpprobe-verification=<token>`` on ``host`` or ``_mcpprobe-challenge.host``."""
+    """Check for ``mcpprobe-verification=<token>`` at ``_mcpprobe.<host>``."""
     if not host:
         return VerificationResult(method="dns-txt", verified=False, detail="target has no host name")
-    lookup = lookup or default_txt_lookup
+    resolver = lookup or default_txt_lookup
     expected = expected_txt_record(token)
-    seen: dict[str, list[str]] = {}
-    for name in (host, f"{CHALLENGE_LABEL}.{host}"):
-        records = lookup(name)
-        # Keep only our own records in the snapshot; other TXT data is not ours to store.
-        seen[name] = [r for r in records if r.startswith(TXT_PREFIX)]
-        if expected in records:
-            return VerificationResult(
-                method="dns-txt",
-                verified=True,
-                detail=f"TXT record found at {name}",
-                evidence={"name": name, "records": seen[name], "checked_at": utcnow().isoformat()},
-            )
+    name = record_name(host)
+    try:
+        records = [r.strip().strip('"') for r in resolver(name)]
+    except DnsLookupError as exc:
+        raise AuthorisationError(str(exc)) from exc
+    # Keep only our own records in the snapshot; other TXT data is not ours to store.
+    ours = [r for r in records if r.startswith(TXT_PREFIX)]
+    snapshot = {"name": name, "records": ours, "checked_at": utcnow().isoformat()}
+    if expected in records:
+        return VerificationResult(
+            method="dns-txt", verified=True, detail=f"TXT record found at {name}", evidence=snapshot
+        )
     return VerificationResult(
         method="dns-txt",
         verified=False,
-        detail=f"no TXT record {TXT_PREFIX}<token> found on {host} or {CHALLENGE_LABEL}.{host}",
-        evidence={"records_seen": seen, "checked_at": utcnow().isoformat()},
+        detail=f"no TXT record {TXT_PREFIX}<token> matching the saved token found at {name}",
+        evidence=snapshot,
     )
 
 

@@ -22,7 +22,7 @@ from mcpprobe.checks._util import (
     try_json,
     well_known_urls,
 )
-from mcpprobe.checks.base import Check, ScanContext, evidence_of
+from mcpprobe.checks.base import Check, ScanContext, evidence_of, evidence_summary
 from mcpprobe.checks.capability import classify_tools
 from mcpprobe.models import Confidence, Finding, Severity, Standards
 from mcpprobe.transport import PROTOCOL_2025_11_25, PROTOCOL_2026_07_28, RpcResponse
@@ -84,12 +84,16 @@ class Auth01NoAuthentication(Check):
         )
         if dangerous:
             desc += f" Tools with dangerous capability classes: {', '.join(dangerous)}."
+        ev = [e for e in [ctx.inventory.tools_evidence] if e]
+        names = ctx.tool_names()
+        shown = ", ".join(names[:8]) + (f" (+{len(names) - 8} more)" if len(names) > 8 else "")
         return [
             self.finding(
                 description=desc,
                 severity=severity,
                 confidence=Confidence.HIGH,
-                evidence=[e for e in [ctx.inventory.tools_evidence] if e],
+                evidence=ev,
+                excerpt=evidence_summary(ev, f"no Authorization header sent; {len(names)} tools listed: {shown}"),
                 location=ctx.target,
                 details={"tools": ctx.tool_names(), "dangerous_tools": dangerous, "local": local},
             )

@@ -44,6 +44,7 @@ async def run(url_or_cmd: str | list[str], *, stdio: bool = False, only=None, sk
         only=only,
         skip=skip,
         timeout=10,
+        _unsafe_allow_any_rate=True,
     )
     report, evidence = await run_scan(cfg)
     return report

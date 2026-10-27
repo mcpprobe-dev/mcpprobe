@@ -10,6 +10,8 @@ from typing import Any
 from mcpprobe import USER_AGENT, __version__
 from mcpprobe.authz import AuthorisationError, AuthorisationRecord, require_active_authorisation
 from mcpprobe.checks import Check, ScanContext, ScanOptions, select_checks
+from mcpprobe.dnsutil import TxtLookup
+from mcpprobe.governance import governance_items
 from mcpprobe.models import (
     CheckMode,
     CheckResult,
@@ -19,7 +21,7 @@ from mcpprobe.models import (
     ScanReport,
     utcnow,
 )
-from mcpprobe.policy import check_opt_out
+from mcpprobe.policy import DEFAULT_RATE, check_opt_out, clamp_rate
 from mcpprobe.transport import (
     EvidenceLog,
     HttpTransport,
@@ -43,13 +45,22 @@ class ScanConfig:
     stdio_env: Mapping[str, str] = field(default_factory=dict)
     headers: Mapping[str, str] = field(default_factory=dict)
     timeout: float = 15.0
-    rate: float = 5.0
+    rate: float = DEFAULT_RATE
     options: ScanOptions = field(default_factory=ScanOptions)
     only: Iterable[str] | None = None
     skip: Iterable[str] | None = None
     authorisation: AuthorisationRecord | None = None
     user_agent: str = USER_AGENT
     verify_tls: bool | str = True
+    #: DNS TXT resolver for the opt-out check (injected in tests).
+    txt_lookup: TxtLookup | None = None
+    #: Test-suite escape hatch for the 10 req/s ceiling. Not exposed on the CLI.
+    _unsafe_allow_any_rate: bool = False
+
+    def effective_rate(self) -> float:
+        if self._unsafe_allow_any_rate:
+            return self.rate
+        return clamp_rate(self.rate)
 
 
 def build_transport(config: ScanConfig, evidence: EvidenceLog, limiter: RateLimiter) -> Transport:
@@ -146,17 +157,28 @@ async def run_check(check: Check, ctx: ScanContext) -> CheckResult:
 async def run_scan(config: ScanConfig) -> tuple[ScanReport, EvidenceLog]:
     """Execute a full scan. Raises TransportError/OptOutError for fatal conditions."""
     evidence = EvidenceLog()
-    limiter = RateLimiter(rate=config.rate)
+    try:
+        limiter = RateLimiter(rate=config.effective_rate())
+    except ValueError as exc:
+        raise TransportError(str(exc)) from exc
     started = utcnow()
     transport = build_transport(config, evidence, limiter)
     options = config.options
     if config.stdio:
         options.stdio_command = list(transport.argv)  # type: ignore[attr-defined]
         options.stdio_env = dict(config.stdio_env)
-    report = ScanReport(version=__version__, target=config.target, mode=options.mode, started_at=started)
+    report = ScanReport(
+        version=__version__,
+        target=config.target,
+        mode=options.mode,
+        started_at=started,
+        attestations=governance_items(),
+    )
     async with transport:
         if isinstance(transport, HttpTransport):
-            await check_opt_out(transport, transport.url)
+            # Must be the very first thing that happens: DNS opt-out, then the
+            # well-known document, before any MCP request.
+            report.notes.extend(await check_opt_out(transport, transport.url, config.txt_lookup))
         fp = await fingerprint(transport)
         report.fingerprint = fp
         if fp.flavour == "unknown" and not fp.auth_required:

@@ -7,7 +7,7 @@ import json
 import re
 from typing import Any
 
-from mcpprobe.checks.base import Check, ScanContext, evidence_of
+from mcpprobe.checks.base import Check, ScanContext, evidence_of, evidence_summary
 from mcpprobe.models import Confidence, Finding, Severity, Standards
 from mcpprobe.transport import HttpTransport, RpcResponse, StdioTransport
 
@@ -216,6 +216,9 @@ class Dos01UnboundedConsumption(Check):
                         severity=Severity.LOW if "slow" in problem else Severity.MEDIUM,
                         confidence=Confidence.MEDIUM,
                         evidence=evidence_of(resp),
+                        excerpt=evidence_summary(
+                            evidence_of(resp), f"{label} probe -> {problem} after {resp.elapsed_ms:.0f} ms"
+                        ),
                         location=ctx.target,
                         details={"probe": label, "status": resp.status, "elapsed_ms": resp.elapsed_ms},
                     )
@@ -241,6 +244,8 @@ class Dos01UnboundedConsumption(Check):
                         severity=Severity.INFO,
                         confidence=Confidence.LOW,
                         evidence=evidence_of(burst_responses[-1]) if burst_responses else [],
+                        excerpt=f"{len(statuses)} x tools/list at {t.limiter.rate:g} req/s, statuses: "
+                        + ", ".join(sorted({str(s) for s in statuses})),
                         location=ctx.target,
                         details={"requests": len(statuses), "rate_cap": t.limiter.rate},
                     )

@@ -132,6 +132,10 @@ class Finding(BaseModel):
     description: str = Field(description="What was observed and why it matters")
     fix: str = Field(description="Plain-English remediation")
     evidence: list[EvidenceRecord] = Field(default_factory=list)
+    evidence_excerpt: str = Field(
+        default="",
+        description="Short human-readable excerpt of the evidence (request, status, body snippet)",
+    )
     location: str | None = Field(
         default=None,
         description="Where in the target the issue lives (tool name, header, URL path...)",
@@ -206,6 +210,21 @@ class Inventory(BaseModel):
         }
 
 
+class AttestationItem(BaseModel):
+    """A governance item that cannot be assessed by an automated scan.
+
+    Reported honestly as "attestation only" with a short checklist, rather
+    than faking coverage.
+    """
+
+    id: str
+    title: str
+    standards: Standards
+    reason: str = Field(description="Why a black-box scan cannot assess this")
+    checklist: list[str] = Field(default_factory=list)
+    status: str = "attestation-only"
+
+
 class ScanReport(BaseModel):
     """Top-level report document."""
 
@@ -219,6 +238,7 @@ class ScanReport(BaseModel):
     inventory_summary: dict[str, int] = Field(default_factory=dict)
     checks: list[CheckResult] = Field(default_factory=list)
     findings: list[Finding] = Field(default_factory=list)
+    attestations: list[AttestationItem] = Field(default_factory=list)
     evidence_count: int = 0
     authorisation_record: str | None = Field(
         default=None, description="Path of the authorisation record JSON, if active mode"

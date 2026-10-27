@@ -6,6 +6,7 @@ import itertools
 from collections.abc import Iterable, Mapping
 
 from mcpprobe.models import EVIDENCE_BODY_LIMIT, EvidenceRecord, utcnow
+from mcpprobe.redact import redact_secrets, redact_url
 
 #: Response headers worth keeping in evidence (lower-case).
 KEPT_RESPONSE_HEADERS: frozenset[str] = frozenset(
@@ -67,15 +68,17 @@ def _subset(headers: Mapping[str, str] | Iterable[tuple[str, str]], keep: frozen
 
 
 def truncate_body(body: bytes | str | None, limit: int = EVIDENCE_BODY_LIMIT) -> tuple[str, bool]:
-    """Return ``(text, truncated)`` for a body, decoding bytes leniently."""
+    """Return ``(text, truncated)`` for a body: secrets redacted, at most ``limit`` UTF-8 bytes."""
     if body is None:
         return "", False
-    if isinstance(body, bytes):
-        raw = body
-    else:
-        raw = body.encode("utf-8", errors="replace")
+    raw = body if isinstance(body, bytes) else body.encode("utf-8", errors="replace")
     truncated = len(raw) > limit
-    text = raw[:limit].decode("utf-8", errors="replace")
+    # Redact on a slightly larger window so a secret straddling the cut is still caught.
+    text = redact_secrets(raw[: limit * 2].decode("utf-8", errors="replace"))
+    encoded = text.encode("utf-8")
+    if len(encoded) > limit:
+        truncated = True
+        text = encoded[:limit].decode("utf-8", errors="ignore")
     return text, truncated
 
 
@@ -109,7 +112,7 @@ class EvidenceLog:
             timestamp=utcnow(),
             transport=transport,
             method=method,
-            url=url,
+            url=redact_url(url) if url else url,
             status=status,
             request_headers=_subset(request_headers or {}, KEPT_REQUEST_HEADERS),
             response_headers=_subset(response_headers or {}, KEPT_RESPONSE_HEADERS),

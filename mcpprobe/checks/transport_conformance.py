@@ -7,7 +7,7 @@ import secrets
 from typing import Any
 
 from mcpprobe.checks._util import host_of, is_local_or_private, shannon_entropy
-from mcpprobe.checks.base import Check, ScanContext, evidence_of
+from mcpprobe.checks.base import Check, ScanContext, evidence_of, evidence_summary
 from mcpprobe.models import Confidence, EvidenceRecord, Finding, Severity, Standards
 from mcpprobe.transport import PROTOCOL_2025_11_25, PROTOCOL_2026_07_28, RpcResponse
 from mcpprobe.transport.base import CLIENT_INFO, is_jsonrpc_error_body
@@ -95,6 +95,11 @@ class Trans01OriginValidation(Check):
                 severity=Severity.HIGH if local else Severity.MEDIUM,
                 confidence=Confidence.HIGH if resp.result is not None else Confidence.MEDIUM,
                 evidence=evidence_of(resp),
+                excerpt=evidence_summary(
+                    evidence_of(resp),
+                    f"sent Origin: {EVIL_ORIGIN}; expected 403"
+                    + ("; got a JSON-RPC result" if resp.result is not None else ""),
+                ),
                 location=ctx.target,
                 details=details,
             )
@@ -144,6 +149,9 @@ class Trans02ProtocolVersionHandling(Check):
                 severity=Severity.LOW,
                 confidence=Confidence.HIGH if resp.result is not None else Confidence.MEDIUM,
                 evidence=evidence_of(resp),
+                excerpt=evidence_summary(
+                    evidence_of(resp), f"sent MCP-Protocol-Version: {BOGUS_VERSION}; expected 400"
+                ),
                 location=ctx.target,
                 details={"status": resp.status},
             )
@@ -219,6 +227,10 @@ class Trans03SessionIdQuality(Check):
                     severity=Severity.HIGH,
                     confidence=Confidence.HIGH,
                     evidence=evidence_of(*responses),
+                    excerpt=evidence_summary(
+                        evidence_of(*responses),
+                        "Mcp-Session-Id values observed: " + ", ".join(s[:12] for s in ids),
+                    ),
                     location=ctx.target,
                     details={
                         "samples": [s[:8] + "…" if len(s) > 8 else s for s in ids],
@@ -245,6 +257,9 @@ class Trans03SessionIdQuality(Check):
                     severity=Severity.HIGH,
                     confidence=Confidence.HIGH,
                     evidence=evidence_of(resp),
+                    excerpt=evidence_summary(
+                        evidence_of(resp), "tools/list with a never-issued Mcp-Session-Id returned a result"
+                    ),
                     location=ctx.target,
                 )
             )
@@ -357,6 +372,7 @@ class Trans05TlsAndHeaders(Check):
                     severity=Severity.INFO if local else Severity.HIGH,
                     confidence=Confidence.HIGH,
                     evidence=[sample] if sample else [],
+                    excerpt=f"target URL scheme is http: {ctx.target}",
                     location=ctx.target,
                     details={"scheme": scheme, "local": local},
                 )
@@ -387,6 +403,13 @@ class Trans05TlsAndHeaders(Check):
                         severity=Severity.LOW if scheme == "https" else Severity.INFO,
                         confidence=Confidence.HIGH,
                         evidence=[sample],
+                        excerpt=evidence_summary(
+                            [sample],
+                            "response headers: "
+                            + (", ".join(f"{k}: {v}" for k, v in sorted(headers.items())[:6]) or "(none kept)")
+                            + "; missing "
+                            + ", ".join(missing),
+                        ),
                         location=ctx.target,
                         details={"missing": missing},
                     )

@@ -6,6 +6,7 @@ import ipaddress
 import json
 import math
 import re
+import unicodedata
 from collections import Counter
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -82,6 +83,20 @@ def try_json(body: bytes) -> Any | None:
         return None
 
 
+def visible(text: str) -> str:
+    """Make invisible/format characters visible as ``<U+XXXX>`` so reviewers can see them."""
+    out: list[str] = []
+    for ch in text:
+        cat = unicodedata.category(ch)
+        if ch in "\n\t":
+            out.append(" ")
+        elif cat in {"Cf", "Cc", "Co", "Cn"} or 0xE0000 <= ord(ch) <= 0xE007F:
+            out.append(f"<U+{ord(ch):04X}>")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
 def excerpt(text: str, limit: int = 160) -> str:
-    text = text.replace("\n", " ")
-    return text if len(text) <= limit else text[: limit - 1] + "…"
+    text = visible(text)
+    return text if len(text) <= limit else text[: limit - 1] + "\u2026"

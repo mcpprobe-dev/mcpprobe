@@ -28,7 +28,8 @@ from mcpprobe.authz import (
 from mcpprobe.checks import ALL_CHECKS, ScanOptions
 from mcpprobe.checks._util import host_of
 from mcpprobe.models import CheckMode, Severity
-from mcpprobe.policy import OptOutError
+from mcpprobe.dnsutil import record_name
+from mcpprobe.policy import DEFAULT_RATE, MAX_RATE, OptOutError
 from mcpprobe.report import render, write_json, write_sarif
 from mcpprobe.scanner import ScanConfig, run_scan
 from mcpprobe.transport import TransportError, ensure_url
@@ -68,11 +69,12 @@ def _parse_kv(values: Sequence[str], what: str, sep: str) -> dict[str, str]:
 @click.option("--token", help="Verification token for --verify dns-txt (default: the one saved by 'mcpprobe token').")
 @click.option("--reference", help="Operator reference stored in the authorisation record (ticket, change number).")
 @click.option("--exclude-tool", "excluded_tools", multiple=True, help="Tool names that must never be called (repeatable).")
-@click.option("--rate", default=5.0, show_default=True, help="Maximum requests per second.")
+@click.option("--rate", default=DEFAULT_RATE, show_default=True, type=click.FloatRange(min=0.1, max=MAX_RATE), help=f"Maximum requests per second (hard ceiling {MAX_RATE:g}).")
 @click.option("--timeout", default=15.0, show_default=True, help="Per-request timeout in seconds.")
 @click.option("--fail-on", default="high", type=click.Choice(SEVERITIES), show_default=True, help="Exit 1 if any finding is at or above this severity.")
 @click.option("--json", "json_path", type=click.Path(dir_okay=False), help="Write the JSON report (with evidence) here.")
 @click.option("--sarif", "sarif_path", type=click.Path(dir_okay=False), help="Write a SARIF 2.1.0 report here.")
+@click.option("--sarif-location", help="Repository-relative file to anchor SARIF results to (default: the target URI).")
 @click.option("--baseline", "baseline_path", type=click.Path(dir_okay=False), help="META-02 baseline file to compare against and update.")
 @click.option("--no-write-baseline", is_flag=True, help="Compare against --baseline but do not overwrite it.")
 @click.option("--no-follow-as", is_flag=True, help="AUTH-03: do not fetch authorization-server metadata on third-party hosts.")
@@ -98,6 +100,7 @@ def scan_cmd(  # noqa: PLR0913
     fail_on: str,
     json_path: str | None,
     sarif_path: str | None,
+    sarif_location: str | None,
     baseline_path: str | None,
     no_write_baseline: bool,
     no_follow_as: bool,
@@ -130,7 +133,8 @@ def scan_cmd(  # noqa: PLR0913
                 reference=reference,
             )
         except AuthorisationError as exc:
-            err.print(f"authorisation refused: {exc}")
+            err.print(f"authorisation refused: {exc}", markup=False, highlight=False)
+            err.print("active mode was not started; no request was sent to the target.", markup=False)
             sys.exit(EXIT_ERROR)
         options = ScanOptions(
             mode=CheckMode.ACTIVE if active else CheckMode.PASSIVE,
@@ -161,15 +165,15 @@ def scan_cmd(  # noqa: PLR0913
             )
         report, evidence = asyncio.run(run_scan(config))
     except OptOutError as exc:
-        err.print(f"aborted: {exc}")
+        err.print(f"aborted: {exc}", markup=False, highlight=False)
         sys.exit(EXIT_ERROR)
-    except TransportError as exc:
-        err.print(f"error: {exc}")
+    except (TransportError, AuthorisationError) as exc:
+        err.print(f"error: {exc}", markup=False, highlight=False)
         sys.exit(EXIT_ERROR)
     except click.ClickException:
         raise
     except KeyError as exc:
-        err.print(f"error: {exc.args[0] if exc.args else exc}")
+        err.print(f"error: {exc.args[0] if exc.args else exc}", markup=False, highlight=False)
         sys.exit(EXIT_ERROR)
 
     if active:
@@ -178,13 +182,13 @@ def scan_cmd(  # noqa: PLR0913
     if json_path:
         write_json(report, json_path, evidence)
     if sarif_path:
-        write_sarif(report, sarif_path)
+        write_sarif(report, sarif_path, location_uri=sarif_location)
+    threshold = Severity(fail_on)
     if not quiet:
-        render(report, Console(), verbose=verbose, show_evidence=True)
+        render(report, Console(), verbose=verbose, show_evidence=True, fail_on=threshold)
         for label, path in (("JSON", json_path), ("SARIF", sarif_path), ("authorisation record", report.authorisation_record)):
             if path:
                 console.print(f"[dim]{label}: {path}[/dim]")
-    threshold = Severity(fail_on)
     worst = report.max_severity()
     sys.exit(EXIT_FINDINGS if worst is not None and worst >= threshold else EXIT_CLEAN)
 
@@ -216,9 +220,8 @@ def token_cmd(host: str) -> None:
     token = generate_token()
     path = save_token(host, token)
     click.echo(f"Saved token for {host} in {path}")
-    click.echo("Publish ONE of these DNS TXT records, then run with --active --verify dns-txt:")
-    click.echo(f"  {host}.  TXT  \"{expected_txt_record(token)}\"")
-    click.echo(f"  _mcpprobe-challenge.{host}.  TXT  \"{expected_txt_record(token)}\"")
+    click.echo("Publish this DNS TXT record, then run with --active --verify dns-txt:")
+    click.echo(f"  {record_name(host)}.  TXT  \"{expected_txt_record(token)}\"")
 
 
 def main(argv: Sequence[str] | None = None) -> None:
