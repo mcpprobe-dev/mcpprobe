@@ -192,7 +192,7 @@ def test_cli_help_and_checks():
     res = invoke("checks", "--format", "markdown")
     assert res.exit_code == 0
     for cid in ("AUTH-01", "META-05", "DOS-01", "INJ-01", "SANDBOX-01"):
-        assert f"| {cid} |" in res.output
+        assert f"[{cid}]" in res.output
 
 
 def test_cli_default_subcommand(live_server):

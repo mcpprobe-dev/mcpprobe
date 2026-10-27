@@ -256,12 +256,9 @@ def scan_cmd(
 def checks_cmd(fmt: str) -> None:
     """List every check with its mode, default severity and standards mapping."""
     if fmt == "markdown":
-        click.echo("| ID | Mode | Default severity | Title | Standards |")
-        click.echo("|---|---|---|---|---|")
-        for c in ALL_CHECKS:
-            click.echo(
-                f"| {c.id} | {c.mode.value} | {c.severity.value} | {c.title} | {', '.join(c.standards.as_tags()) or '-'} |"
-            )
+        from mcpprobe.catalogue import checks_markdown
+
+        click.echo(checks_markdown(), nl=False)
         return
     from rich.table import Table
 
@@ -288,7 +285,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     """Entry point: default to the ``scan`` sub-command when the first argument is a target."""
     args = list(sys.argv[1:] if argv is None else argv)
     known = {"scan", "checks", "token"}
-    if args and args[0] not in known and not args[0].startswith("-"):
+    group_options = {"-h", "--help", "--version"}
+    if args and args[0] not in known and args[0] not in group_options:
         args.insert(0, "scan")
     cli.main(args=args, prog_name="mcpprobe", standalone_mode=True)
 
