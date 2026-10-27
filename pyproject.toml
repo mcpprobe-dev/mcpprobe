@@ -1,0 +1,77 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mcpprobe"
+dynamic = ["version"]
+description = "Security scanner for Model Context Protocol (MCP) servers: auth, transport, tool-metadata and poisoning checks with JSON and SARIF output."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+authors = [{ name = "mcpprobe contributors" }]
+keywords = ["mcp", "model-context-protocol", "security", "scanner", "sarif", "owasp"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Information Technology",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Security",
+  "Typing :: Typed",
+]
+dependencies = [
+  "httpx>=0.27",
+  "pydantic>=2.6",
+  "rich>=13.7",
+  "click>=8.1",
+  "PyJWT>=2.8",
+  "dnspython>=2.6",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8.0",
+  "pytest-asyncio>=0.23",
+  "aiohttp>=3.9",
+  "ruff>=0.4",
+]
+
+[project.scripts]
+mcpprobe = "mcpprobe.cli:main"
+
+[project.urls]
+Homepage = "https://mcpprobe.tech"
+"Scanning policy" = "https://mcpprobe.tech/scanning-policy"
+Source = "https://github.com/mcpprobe/mcpprobe"
+Issues = "https://github.com/mcpprobe/mcpprobe/issues"
+
+[tool.hatch.version]
+path = "mcpprobe/__init__.py"
+
+[tool.hatch.build.targets.sdist]
+include = ["/mcpprobe", "/tests", "/README.md", "/CHECKS.md", "/SECURITY.md", "/LICENSE"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["mcpprobe"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+filterwarnings = ["error::DeprecationWarning:mcpprobe.*"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B", "N", "ANN", "RUF"]
+ignore = ["ANN401", "RUF012", "UP042", "E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ANN", "RUF", "B"]
