@@ -49,8 +49,8 @@ mcpprobe = "mcpprobe.cli:main"
 [project.urls]
 Homepage = "https://mcpprobe.tech"
 "Scanning policy" = "https://mcpprobe.tech/scanning-policy"
-Source = "https://github.com/mcpprobe/mcpprobe"
-Issues = "https://github.com/mcpprobe/mcpprobe/issues"
+Source = "https://github.com/mcpprobe-dev/mcpprobe"
+Issues = "https://github.com/mcpprobe-dev/mcpprobe/issues"
 
 [tool.hatch.version]
 path = "mcpprobe/__init__.py"

@@ -5,7 +5,7 @@ FROM python:3.13-slim
 
 LABEL org.opencontainers.image.title="mcpprobe" \
       org.opencontainers.image.description="Security scanner for MCP servers" \
-      org.opencontainers.image.source="https://github.com/mcpprobe/mcpprobe" \
+      org.opencontainers.image.source="https://github.com/mcpprobe-dev/mcpprobe" \
       org.opencontainers.image.licenses="MIT"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \

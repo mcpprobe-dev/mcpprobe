@@ -38,4 +38,4 @@ First public release of the open-source scanner core.
 - Docker container GitHub Action, CI (ruff, strict mypy, pytest on Python
   3.11 to 3.13) and PyPI Trusted Publishing release workflow.
 
-[0.1.0]: https://github.com/mcpprobe/mcpprobe/releases/tag/v0.1.0
+[0.1.0]: https://github.com/mcpprobe-dev/mcpprobe/releases/tag/v0.1.0
