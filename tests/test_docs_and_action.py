@@ -41,7 +41,7 @@ def test_project_files_exist(name):
 def test_readme_contract():
     readme = (ROOT / "README.md").read_text()
     for needle in (
-        "pipx run --spec mcpprobe-cli mcpprobe https://your-server.example/mcp",
+        "pipx run --spec mcpprobe-scanner mcpprobe https://your-server.example/mcp",
         "## Exit codes",
         "upload-sarif",
         "--authorised-by",

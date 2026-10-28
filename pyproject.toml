@@ -3,7 +3,7 @@ requires = ["hatchling>=1.21"]
 build-backend = "hatchling.build"
 
 [project]
-name = "mcpprobe-cli"
+name = "mcpprobe-scanner"
 dynamic = ["version"]
 description = "Security scanner for Model Context Protocol (MCP) servers: auth, transport, tool-metadata and poisoning checks with JSON and SARIF output."
 readme = "README.md"

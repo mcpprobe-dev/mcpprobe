@@ -14,13 +14,13 @@ It runs locally, sends no telemetry, and never calls a tool in its default mode.
 ## 60-second quickstart
 
 ```console
-$ pipx run --spec mcpprobe-cli mcpprobe https://your-server.example/mcp
+$ pipx run --spec mcpprobe-scanner mcpprobe https://your-server.example/mcp
 ```
 
 or install it:
 
 ```console
-$ pipx install mcpprobe-cli    # or: pip install mcpprobe-cli; the command is `mcpprobe`
+$ pipx install mcpprobe-scanner    # or: pip install mcpprobe-scanner; the command is `mcpprobe`
 $ mcpprobe https://your-server.example/mcp --sarif mcpprobe.sarif --json mcpprobe.json
 ```
 
@@ -142,7 +142,7 @@ jobs:
 Or from any CI with the CLI:
 
 ```console
-$ pipx run --spec mcpprobe-cli mcpprobe https://staging.your-server.example/mcp --sarif mcpprobe.sarif --fail-on high
+$ pipx run --spec mcpprobe-scanner mcpprobe https://staging.your-server.example/mcp --sarif mcpprobe.sarif --fail-on high
 ```
 
 Results use `error` for critical/high, `warning` for medium and `note` for low/info,

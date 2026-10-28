@@ -6,7 +6,7 @@ All notable changes to this project are documented here. The format follows
 
 ## [0.1.0]
 
-- Published on PyPI as `mcpprobe-cli` (the name `mcpprobe` is reserved by PyPI's similar-name rule). The command and the Python package are both `mcpprobe`.
+- Published on PyPI as `mcpprobe-scanner` (PyPI blocks `mcpprobe` and `mcpprobe-cli` as too similar to existing projects). The command and the Python package are both `mcpprobe`.
  - 2026-10-27
 
 First public release of the open-source scanner core.
