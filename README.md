@@ -199,4 +199,4 @@ $ python -m tests.fake_server --preset vulnerable --port 8765   # deliberately v
 $ mcpprobe http://127.0.0.1:8765/mcp
 ```
 
-Security issues: see [SECURITY.md](SECURITY.md). Licence: [MIT](LICENSE).
+Security issues: see [SECURITY.md](SECURITY.md). Licence: [Apache-2.0](LICENSE) from 0.2.0 (see [NOTICE](NOTICE)); 0.1.0 was released under MIT.

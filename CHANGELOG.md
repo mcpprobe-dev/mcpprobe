@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+- Licence changes from MIT to Apache-2.0 for future releases. Version 0.1.0 remains available under MIT.
+
 ## [0.1.0]
 
 - Published on PyPI as `mcpprobe-scanner` (PyPI blocks `mcpprobe` and `mcpprobe-cli` as too similar to existing projects). The command and the Python package are both `mcpprobe`.
