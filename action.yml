@@ -1,5 +1,5 @@
 name: "mcpprobe MCP security scan"
-description: "Passive security scan of an MCP server you own: auth, transport, tool poisoning and metadata checks, with SARIF for code scanning."
+description: "Passive security scan of an MCP server you own: auth, transport and tool-poisoning checks, SARIF for code scanning."
 author: "mcpprobe contributors"
 branding:
   icon: "shield"
@@ -14,7 +14,7 @@ inputs:
     required: false
     default: "high"
   rate:
-    description: "Maximum requests per second (1-10)."
+    description: "Maximum requests per second (0.1-10; hard ceiling 10)."
     required: false
     default: "5"
   sarif-output:
@@ -22,7 +22,7 @@ inputs:
     required: false
     default: "mcpprobe.sarif"
   sarif-location:
-    description: "Repository file to anchor SARIF results to (e.g. your server entry point). Defaults to the target URL."
+    description: "Repository file to anchor SARIF results to (e.g. your server entry point). Defaults to the target URL, which code scanning cannot link to a file."
     required: false
     default: ""
   json-output:
@@ -34,19 +34,21 @@ inputs:
     required: false
     default: ""
   headers:
-    description: "Extra HTTP headers, one 'Name: value' per line (for example a test bearer token from secrets)."
+    description: "Extra HTTP headers, one 'Name: value' per line (for example a test bearer token from secrets). Credential headers are redacted in the JSON report."
     required: false
     default: ""
   extra-args:
-    description: "Additional mcpprobe scan arguments."
+    description: "Additional mcpprobe scan arguments, shell-split (for example '--skip DOS-01 -v'). Active mode also needs --authorised-by, --scope and --verify (see README)."
     required: false
     default: ""
 
 outputs:
   sarif-file:
-    description: "Path of the SARIF file that was written."
+    description: "Path of the SARIF file that was written (empty if none was written)."
   exit-code:
-    description: "mcpprobe exit code: 0 clean, 1 findings at or above fail-on, 2 error/opt-out."
+    description: "mcpprobe exit code: 0 clean, 1 findings at or above fail-on, 2 error (unreachable, bad input, opt-out), 3 the target is not an MCP server."
+  result:
+    description: "Outcome as a word: clean, findings, error or not-mcp. Upload SARIF only for clean or findings; the other two have no results and would close open alerts."
 
 runs:
   using: "docker"

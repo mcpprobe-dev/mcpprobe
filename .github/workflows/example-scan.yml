@@ -1,0 +1,78 @@
+# Example: scan an MCP server with the mcpprobe Action and upload the results to
+# GitHub code scanning. Runs only when started by hand (Actions tab -> "Example MCP scan"
+# -> Run workflow); it is not triggered by pushes or pull requests to this repository.
+#
+# In your own repository, replace `uses: ./` with `uses: mcpprobe-dev/mcpprobe@v0.2.0`
+# (see docs/github-action.md). `./` runs the Action from this checkout so the example
+# always exercises the code on the branch it is started from.
+#
+# Only scan servers you own or are authorised to test.
+name: Example MCP scan
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "MCP endpoint to scan (Streamable HTTP). Must be a server you own."
+        required: true
+        default: "https://mcp-test.nullivo.com/mcp"
+      fail-on:
+        description: "Fail when a finding is at or above this severity"
+        required: true
+        default: "high"
+        type: choice
+        options: [critical, high, medium, low, info]
+
+permissions:
+  contents: read
+  security-events: write   # upload-sarif
+  actions: read            # upload-sarif in private repositories
+
+jobs:
+  mcpprobe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scan the MCP server
+        id: scan
+        uses: ./
+        with:
+          target: ${{ inputs.url }}
+          fail-on: ${{ inputs.fail-on }}
+          sarif-output: mcpprobe.sarif
+          json-output: mcpprobe.json
+
+      # Upload only when the scan really ran (exit 0 or 1). For exit 2 (error) and
+      # exit 3 (not an MCP server) the SARIF has no results, and uploading it would
+      # mark every open mcpprobe alert as fixed.
+      - name: Upload SARIF to code scanning
+        if: ${{ !cancelled() && (steps.scan.outputs.exit-code == '0' || steps.scan.outputs.exit-code == '1') }}
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: mcpprobe.sarif
+          category: mcpprobe
+
+      - name: Keep the full JSON report (with evidence)
+        if: ${{ !cancelled() && hashFiles('mcpprobe.json') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcpprobe-report
+          path: mcpprobe.json
+          retention-days: 14
+
+      # The scan step already failed the job for exit codes 1-3; this step only makes
+      # the reason obvious in the run summary, including with Action versions that
+      # predate the built-in annotations.
+      - name: Explain the outcome
+        if: ${{ failure() }}
+        env:
+          EXIT_CODE: ${{ steps.scan.outputs.exit-code }}
+          TARGET: ${{ inputs.url }}
+        run: |
+          case "$EXIT_CODE" in
+            1) echo "::error title=mcpprobe::Findings at or above the fail-on threshold on $TARGET. See Security -> Code scanning." ;;
+            3) echo "::error title=mcpprobe::$TARGET answered but is not an MCP server (wrong URL or path?). Nothing was checked; SARIF was not uploaded." ;;
+            2) echo "::error title=mcpprobe::The scan of $TARGET did not complete (unreachable, bad input or opt-out). See the scan step log." ;;
+            *) echo "::error title=mcpprobe::The scan step failed before mcpprobe reported an exit code (for example the image build). See the scan step log." ;;
+          esac

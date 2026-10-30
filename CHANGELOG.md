@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### GitHub Action
+
+- The Action now names its outcome: one annotation per run (`mcpprobe: findings`,
+  `mcpprobe: not an MCP server`, `mcpprobe: scan error`, or a `mcpprobe: passed`
+  notice), a job summary with a severity table, and a new `result` output (`clean`,
+  `findings`, `error`, `not-mcp`). Exit code 3 (not an MCP server) is documented in
+  the `exit-code` output. `sarif-file` is empty when no SARIF was written.
+- `action.yml` description shortened to 115 characters for GitHub Marketplace.
+- README and new `docs/github-action.md` pin `@v0.2.0` and upload SARIF only for exit
+  codes 0 and 1: SARIF from an error or a non-MCP target has no results and would
+  close every open alert. New manual-only example workflow
+  `.github/workflows/example-scan.yml`.
+
 ## [0.2.0]
 
 Accuracy release, driven by an independent review of a 0.1.0 scan of the project's own
