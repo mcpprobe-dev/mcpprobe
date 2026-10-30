@@ -17,6 +17,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from mcpprobe.checks import proof
 from mcpprobe.checks._util import excerpt
 from mcpprobe.checks.base import Check, ScanContext
 from mcpprobe.models import Confidence, Finding, Severity, Standards
@@ -25,8 +26,26 @@ MAX_DESCRIPTION_LENGTH = 2000
 
 _MARKUP = re.compile(
     r"<\s*/?\s*(important|system|instructions?|secret|hidden|assistant|prompt|context)\b[^>]*>"
-    r"|<!--|-->|\[/?INST\]|<<\s*/?SYS\s*>>|^\s*#+\s*system\b|\bSYSTEM\s*:",
-    re.I | re.M,
+    r"|<!--|-->|\[/?INST\]|<<\s*/?SYS\s*>>",
+    re.I,
+)
+#: Upper-case role markers only: "Operating system: Linux" must not match.
+_ROLE_MARKER = re.compile(r"^\s*#+\s*SYSTEM\b|\bSYSTEM\s*:|\bASSISTANT\s*:", re.M)
+
+#: Verbs a model would be told to perform with a tool.
+_CALL_VERB = r"(call|use|invoke|run|execute|trigger|select|choose|pick)"
+#: Verbs that move data somewhere.
+_SEND_VERB = (
+    r"(send|sends|sending|include|including|pass|passing|forward|share|attach|upload|provide|append|"
+    r"copy|post|submit|transmit|leak|exfiltrate|embed|put|report|relay|dump)"
+)
+#: The model's own context: conversation, history, system prompt.
+_CONTEXT_NOUN = (
+    r"((full|entire|whole|complete|previous|prior|earlier|past|all(\s+the)?|every)\s+)?"
+    r"(conversation(\s+(history|log|so\s+far|context))?|chat(\s+(history|log|transcript))|"
+    r"message\s+history|system\s+prompt|developer\s+(prompt|message)|hidden\s+prompt|"
+    r"context\s+window|transcript|(previous|prior|earlier|all|other)\s+messages|"
+    r"(your|the\s+model'?s?|the\s+assistant'?s?)\s+(instructions|rules|prompt|memory|context))"
 )
 
 _HIDDEN_INSTRUCTIONS: list[tuple[str, re.Pattern[str]]] = [
@@ -34,10 +53,12 @@ _HIDDEN_INSTRUCTIONS: list[tuple[str, re.Pattern[str]]] = [
         "conceal from user",
         re.compile(
             r"\b(do\s*n[o']t|never|must\s+not|should\s+not|without)\s+(tell(ing)?|inform(ing)?|"
-            r"mention(ing)?|show(ing)?|display(ing)?|reveal(ing)?|disclos(e|ing)|alert(ing)?)\s+"
-            r"(the\s+|to\s+the\s+)?(user|human|operator|person)\b"
+            r"mention(ing)?|show(ing)?|display(ing)?|reveal(ing)?|disclos(e|ing)|alert(ing)?|"
+            r"notify(ing)?|ask(ing)?)\s+(the\s+|to\s+the\s+|your\s+)?(user|human|operator|person)\b"
             r"|\b(keep|hide)\s+(this|it)\s+(secret|hidden|from\s+the\s+user)\b"
-            r"|\bimplementation\s+detail\b|\bsilently\b|\bsecretly\b|\bcovertly\b|\bdiscreetly\b",
+            r"|\bimplementation\s+detail\b"
+            r"|\b(silently|secretly|covertly|discreetly|quietly)\s+(\w+\s+){0,2}?"
+            r"(send|forward|copy|include|upload|call|run|read|add|bcc|attach|pass|share|post)\b",
             re.I,
         ),
     ),
@@ -47,50 +68,85 @@ _HIDDEN_INSTRUCTIONS: list[tuple[str, re.Pattern[str]]] = [
             r"\b(ignore|disregard|forget|override|bypass)\s+(all\s+|any\s+|the\s+|your\s+)?"
             r"(previous|prior|above|earlier|other|system|safety)?\s*(instructions?|rules?|guidelines?|"
             r"prompts?|constraints?|policies)\b"
-            r"|\bregardless\s+of\s+what\s+the\s+user\b|\byou\s+are\s+now\b|\bnew\s+instructions?\s*:",
+            r"|\bregardless\s+of\s+what\s+the\s+user\b|\byou\s+are\s+now\s+(a|an|in|the)\b"
+            r"|\bnew\s+instructions?\s*:",
             re.I,
         ),
     ),
     (
         "read and forward data",
         re.compile(
-            r"\b(read|open|cat|load|access|collect|gather)\s+(the\s+)?(file|contents?\s+of|~|/|\$HOME|%)"
-            r"|\b(pass|include|send|put|insert|embed|append|attach)\s+(its|the|their|all)\s+"
+            r"\b(pass|include|send|put|insert|embed|append|attach)\s+(its|their)\s+"
             r"(contents?|value|data|text|output)\b"
             r"|\bas\s+(a\s+)?(side\s*note|hidden\s+parameter|extra\s+(parameter|argument))\b"
-            r"|\b(exfiltrate|upload|forward|transmit|leak)\b",
+            r"|\bexfiltrat\w*",
             re.I,
         ),
     ),
     (
-        "prerequisite coercion",
+        "model directive",
         re.compile(
-            r"\b(before|prior\s+to)\s+(using|calling|invoking|running)\s+(this|any|the)\s+tool"
-            r"|\bthis\s+is\s+(a\s+)?(required|mandatory|necessary)\s+step\b"
-            r"|\b(the\s+)?(assistant|model|ai|agent|you)\s+(must|should|need\s+to|has\s+to|have\s+to)\s+"
-            r"(always\s+)?(first\s+)?(read|include|call|send|run|pass|execute|fetch)\b",
+            # "always call this (tool) first", "call this tool before any other"
+            rf"\b(always\s+)?{_CALL_VERB}\s+(this|me|it)(\s+tool|\s+function)?\s+(first|before\b)"
+            r"|\balways\s+" + _CALL_VERB + r"\s+(this|me|it)\b"
+            r"|\bbefore\s+(using|calling|invoking|running)\s+any\s+other\s+(tool|function)s?\b"
+            r"|\b(before|instead\s+of)\s+any\s+other\s+(tool|function)s?\b"
+            r"|\bmust\s+(always\s+)?be\s+(called|invoked|run|used)\s+(first|before)\b"
+            r"|\b(you|the\s+(assistant|model|ai|agent|llm))\s+(must|should|need\s+to|has\s+to|have\s+to|are\s+required\s+to)\s+"
+            r"(always\s+)?(first\s+)?(read|include|call|send|run|pass|execute|fetch|invoke|use|ask|tell|forward)\b"
+            r"|\bthis\s+is\s+(a\s+)?(required|mandatory|necessary)\s+(first\s+)?step\b"
+            r"|\b(regardless|whatever)\s+(of\s+)?(what\s+)?the\s+user\s+(asks|says|wants)\b",
             re.I,
         ),
     ),
     (
         "redirect or replace",
         re.compile(
-            r"\b(instead\s+of|rather\s+than|in\s+place\s+of)\s+(the\s+)?(intended|original|requested|user)"
+            r"\b(instead\s+of|rather\s+than|in\s+place\s+of)\s+(the\s+)?(intended|original|requested)\b"
             r"|\b(always\s+)?(bcc|cc|copy|forward)\s+(to\s+)?[\w.+-]+@[\w-]+\.[\w.-]+"
-            r"|\b(redirect|reroute|change)\s+(all\s+)?(emails?|messages?|payments?|requests?|output)\b"
+            r"|\b(redirect|reroute)\s+(all\s+)?(emails?|messages?|payments?|requests?|output)\b"
             r"|\b(replace|substitute|swap)\s+(the\s+)?(recipient|address|url|destination|account)\b",
             re.I,
         ),
     ),
 ]
 
+#: A request to move the model's context somewhere (same clause, within a few words).
+_CONTEXT_EXFIL = re.compile(
+    rf"\b{_SEND_VERB}\b[^.;:!?\n]{{0,60}}?\b{_CONTEXT_NOUN}\b"
+    rf"|\b{_CONTEXT_NOUN}\b[^.;:!?\n]{{0,40}}?\b(to|into|as|in)\s+(the\s+)?"
+    r"(\w+\s+)?(parameter|argument|field|tool|server|url|endpoint|webhook)\b",
+    re.I,
+)
+
+#: Secrets the model could be asked to hand over.
+_SECRET_NOUN = (
+    r"(api[\s_-]?keys?|access[\s_-]?tokens?|auth(entication)?[\s_-]?tokens?|bearer\s+tokens?|"
+    r"session\s+tokens?|refresh\s+tokens?|passwords?|passphrases?|credentials?|secrets?|"
+    r"private[\s_-]?keys?|ssh\s+keys?|cookies?|\.env\b|environment\s+variables)"
+)
+_SECRET_OWNER = r"(the\s+user'?s|user'?s|your|their|all|any|every|the\s+user)\s+"
+#: Sending or harvesting verbs (``pass``/``provide`` alone are left to the low tier).
+_HARVEST_VERB = (
+    r"(send|forward|upload|transmit|leak|exfiltrate|post|share|email|copy|read|collect|gather|"
+    r"extract|harvest|dump|cat|steal|include|attach|append|embed)"
+)
+_SECRET_HARVEST = re.compile(
+    rf"\b{_HARVEST_VERB}\b[^.;:!?\n]{{0,40}}?\b{_SECRET_OWNER}(\w+\s+){{0,2}}?{_SECRET_NOUN}",
+    re.I,
+)
+_SECRET_MENTION = re.compile(
+    rf"\b(pass|provide|supply|give|enter|send|include)\b[^.;:!?\n]{{0,40}}?\b{_SECRET_NOUN}",
+    re.I,
+)
+
 _SENSITIVE_PATHS = re.compile(
     r"(~|\$HOME|%USERPROFILE%|/home/\w+|/Users/\w+|C:\\Users\\\w+)?"
     r"([/\\]\.ssh\b|\bid_(rsa|ed25519|ecdsa|dsa)\b|[/\\]\.aws[/\\]credentials|\bmcp\.json\b|"
     r"[/\\]\.cursor\b|[/\\]\.claude\b|[/\\]\.config[/\\]|(^|[\s/\\\"'])\.env\b|/etc/(passwd|shadow|hosts)|"
     r"[/\\]\.npmrc\b|[/\\]\.pypirc\b|[/\\]\.git-credentials\b|[/\\]\.kube[/\\]config|"
-    r"[/\\]\.docker[/\\]config\.json|\bwallet\.dat\b|\bkeychain\b|[/\\]\.gnupg\b|"
-    r"[/\\]\.bash_history\b|[/\\]\.netrc\b|\b(private|secret)[_ ]?key\b|/proc/self/environ)",
+    r"[/\\]\.docker[/\\]config\.json|\bwallet\.dat\b|[/\\]Keychains?\b|\.keychain(-db)?\b|[/\\]\.gnupg\b|"
+    r"[/\\]\.bash_history\b|[/\\]\.netrc\b|/proc/self/environ)",
     re.I,
 )
 
@@ -130,6 +186,8 @@ class Indicator:
     confidence: Confidence
     detail: str
     matches: list[str] = field(default_factory=list)
+    #: (category, matched text) pairs, used to label each phrase in the proof.
+    labelled: list[tuple[str, str]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -217,34 +275,54 @@ def analyse_text(text: str, *, other_tool_names: Sequence[str] = (), own_name: s
             )
         )
 
-    markup = [m.group(0) for m in _MARKUP.finditer(text)]
+    markup = [m.group(0) for m in _MARKUP.finditer(text)] + [m.group(0) for m in _ROLE_MARKER.finditer(text)]
     if markup:
         indicators.append(
             Indicator(
                 "hidden_markup",
                 Severity.HIGH,
                 Confidence.MEDIUM,
-                "prompt-style markup inside a description",
+                "prompt-style markup or HTML comment inside a description",
                 sorted(set(markup))[:5],
             )
         )
 
     instruction_kinds: list[str] = []
     instruction_matches: list[str] = []
-    for label, pattern in _HIDDEN_INSTRUCTIONS:
+    labelled: list[tuple[str, str]] = []
+    patterns = [
+        *_HIDDEN_INSTRUCTIONS,
+        ("context exfiltration", _CONTEXT_EXFIL),
+        ("secret harvesting", _SECRET_HARVEST),
+    ]
+    for label, pattern in patterns:
         found = [m.group(0) for m in pattern.finditer(text)]
         if found:
             instruction_kinds.append(label)
             instruction_matches.extend(found[:3])
+            labelled.extend((label, f) for f in found[:3])
     if instruction_kinds:
-        strong = "conceal from user" in instruction_kinds or "override instructions" in instruction_kinds
+        strong = {"conceal from user", "override instructions"} & set(instruction_kinds)
+        severe = len(instruction_kinds) >= 2 or bool(strong)
         indicators.append(
             Indicator(
                 "hidden_instruction",
-                Severity.HIGH if strong or len(instruction_kinds) >= 2 else Severity.MEDIUM,
-                Confidence.HIGH if strong and len(instruction_kinds) >= 2 else Confidence.MEDIUM,
-                "imperative instructions aimed at the model: " + ", ".join(instruction_kinds),
-                instruction_matches[:6],
+                Severity.HIGH if severe else Severity.MEDIUM,
+                Confidence.HIGH if len(instruction_kinds) >= 2 else Confidence.MEDIUM,
+                "text addressed to the model rather than describing the tool: "
+                + ", ".join(instruction_kinds),
+                instruction_matches[:8],
+                labelled[:8],
+            )
+        )
+    elif _SECRET_MENTION.search(text):
+        indicators.append(
+            Indicator(
+                "secret_reference",
+                Severity.LOW,
+                Confidence.LOW,
+                "asks for a credential (API key, token, password); review whether the tool needs it",
+                [m.group(0) for m in _SECRET_MENTION.finditer(text)][:3],
             )
         )
 
@@ -282,13 +360,16 @@ def analyse_text(text: str, *, other_tool_names: Sequence[str] = (), own_name: s
 
     urls = sorted({m.group(0) for m in _URL.finditer(text)})
     if urls:
-        exfil = bool(re.search(r"\b(send|post|upload|forward|submit|report)\b", lowered))
+        sends = bool(re.search(r"\b(send|post|upload|forward|submit|report)\b", lowered))
+        sensitive = bool(re.search(_CONTEXT_NOUN, text, re.I) or re.search(_SECRET_NOUN, text, re.I))
+        exfil_url = sends and sensitive
         indicators.append(
             Indicator(
                 "url",
-                Severity.MEDIUM if exfil else Severity.LOW,
-                Confidence.MEDIUM if exfil else Confidence.LOW,
-                "URL inside description" + (" alongside send/upload wording" if exfil else ""),
+                Severity.MEDIUM if exfil_url else Severity.LOW,
+                Confidence.MEDIUM if exfil_url else Confidence.LOW,
+                "URL inside description"
+                + (" alongside send/upload wording about context or secrets" if exfil_url else ""),
                 urls[:4],
             )
         )
@@ -386,12 +467,17 @@ class Meta01ToolDescriptionPoisoning(Check):
     description = (
         "Scans every tool, prompt and resource description, every inputSchema parameter "
         "description and the server 'instructions' for: prompt-style markup (<IMPORTANT>, "
-        "<system>), instructions aimed at the model (conceal from user, override instructions, "
-        "read-and-forward, prerequisite coercion, redirect/replace), credential file paths, "
+        "<system>, HTML comments), instructions aimed at the model (call this first / before any "
+        "other tool, you must, conceal from the user, ignore previous instructions, "
+        "redirect/replace), requests to send the model's context out (conversation, chat "
+        "history, system prompt, previous messages), requests to harvest secrets (the user's API "
+        "key, token, password, credentials, .env), credential file paths, "
         "references to other tools with behaviour-modifying language (shadowing), URLs and "
         "e-mail addresses with send/BCC wording, base64 blobs, zero-width/bidi/tag Unicode, "
         "mixed-script homoglyphs and excessive length. Findings carry tiered confidence and "
-        "are never rated Critical on heuristics alone."
+        "are never rated Critical on heuristics alone. A model directive combined with a request "
+        "to send context out is rated high. Precision is guarded by a corpus of benign "
+        "real-world descriptions in the test-suite that must stay below medium."
     )
     evidence_type = "The tools/list (or prompts/resources/initialize) response and the matched excerpts."
     false_positive_notes = (
@@ -401,12 +487,15 @@ class Meta01ToolDescriptionPoisoning(Check):
         "Review the matched excerpts; a second-opinion judge can be plugged in through the Python API (ScanOptions.judge); mcpprobe itself makes no LLM calls."
     )
     fix = (
-        "Remove any text addressed to the model rather than describing the tool. Keep descriptions "
-        "short and factual, strip invisible Unicode, and never reference other servers' tools. "
-        "Pin and hash approved descriptions in clients (see META-02)."
+        "Rewrite the description so it only says what the tool does. Remove every instruction "
+        "addressed to the model (when to call it, what to call first, what to hide from the user) "
+        "and every request to pass along conversation, prompts, files or credentials. Strip "
+        "invisible Unicode and HTML comments, and never reference other servers' tools. Pin and "
+        "hash approved descriptions in clients (see META-02)."
     )
 
     async def run(self, ctx: ScanContext) -> list[Finding]:
+        ctx.require_metadata()
         names = ctx.tool_names()
         findings: list[Finding] = []
         evidence_map = {
@@ -444,9 +533,23 @@ class Meta01ToolDescriptionPoisoning(Check):
                     ),
                     severity=severity,
                     confidence=confidence,
+                    confidence_reason=None
+                    if confidence == Confidence.HIGH
+                    else (
+                        "Heuristic match on wording"
+                        + (
+                            " from a single indicator category"
+                            if len(indicators) == 1
+                            else " with no high-specificity indicator"
+                        )
+                        + "; legitimate usage guidance can read the same way, so review the matched phrases."
+                    ),
                     evidence=[ev] if ev else [],
                     excerpt=f'{item.path}: "{excerpt(item.text, 240)}"',
                     location=item.path,
+                    affected=[item.owner],
+                    proof=_proof(item, indicators),
+                    verify=_verify(ctx, item),
                     details={
                         "indicators": [
                             {
@@ -463,6 +566,45 @@ class Meta01ToolDescriptionPoisoning(Check):
                 )
             )
         return findings
+
+
+def _proof(item: TextItem, indicators: list[Indicator]) -> str:
+    shown = visible_full(item.text)
+    lines = [f"{item.path} (complete text, {len(item.text)} characters):", f"  {shown}", "", "Matched:"]
+    for ind in indicators:
+        if ind.labelled:
+            for label, m in ind.labelled:
+                lines.append(f'  - {label}: "{visible_full(m)}"')
+        elif ind.matches:
+            for m in ind.matches:
+                lines.append(f'  - {ind.kind.replace("_", " ")}: "{visible_full(m)}"')
+        else:
+            lines.append(f"  - {ind.kind.replace('_', ' ')}: {ind.detail}")
+    return "\n".join(lines)
+
+
+def visible_full(text: str) -> str:
+    """Like :func:`visible` but keeps the whole string (no length cut)."""
+    from mcpprobe.checks._util import visible
+
+    return visible(text)
+
+
+def _verify(ctx: ScanContext, item: TextItem) -> str:
+    if ctx.http is None:
+        return proof.rescan(ctx.target, "META-01", stdio=True)
+    if item.kind in {"tool", "tool_param"}:
+        jq = f'.result.tools[] | select(.name=="{item.owner}") | {{description, inputSchema}}'
+        return proof.curl_rpc(
+            ctx.target,
+            "tools/list",
+            {},
+            include_headers=False,
+            auth_placeholder=ctx.fingerprint.credentials_supplied,
+            jq=jq,
+            expect="a description that only says what the tool does, with nothing addressed to the model",
+        )
+    return proof.rescan(ctx.target, "META-01")
 
 
 def _combine_confidence(indicators: list[Indicator]) -> Confidence:

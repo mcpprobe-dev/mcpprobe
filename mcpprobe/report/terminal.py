@@ -57,6 +57,8 @@ def _finding_block(f: Finding, verbose: bool) -> Group:
     meta = Text("    ")
     meta.append("confidence ", style="dim")
     meta.append(f.confidence.value)
+    if f.confidence_reason:
+        meta.append(f" ({_plain(f.confidence_reason, 200)})", style="dim")
     if f.location:
         meta.append("  where ", style="dim")
         meta.append(_plain(f.location, 120))
@@ -68,13 +70,25 @@ def _finding_block(f: Finding, verbose: bool) -> Group:
         desc = Text("    ")
         desc.append(_plain(f.description, 600))
         lines.append(desc)
-    if f.evidence_excerpt:
+    if f.affected:
+        aff = Text("    affected ", style="dim")
+        aff.append(_plain(", ".join(f.affected), 200))
+        lines.append(aff)
+    if verbose and f.proof:
+        lines.append(Text("    proof", style="dim"))
+        for pl in f.proof.splitlines()[:80]:
+            lines.append(Text("      " + _plain(pl, 300), style="dim"))
+    elif f.evidence_excerpt:
         ev = Text("    evidence ", style="dim")
         ev.append(_plain(f.evidence_excerpt, 300 if not verbose else 1200), style="dim")
         lines.append(ev)
     fix = Text("    fix ", style=f"bold {PASS_HEX}")
     fix.append(_plain(f.fix, 400 if not verbose else 2000))
     lines.append(fix)
+    if f.verify:
+        ver = Text("    verify ", style="dim")
+        ver.append(_plain(f.verify, 600))
+        lines.append(ver)
     lines.append(Text(""))
     return Group(*lines)
 
@@ -108,6 +122,20 @@ def render(
     sub.append(f"mode={report.mode.value}")
     console.print(Panel(header, subtitle=Text(" | ".join(sub)), subtitle_align="left"))
 
+    if report.target_kind != "mcp":
+        console.print(
+            Text(
+                _plain(
+                    report.fingerprint.error
+                    if report.fingerprint and report.fingerprint.error
+                    else report.target_kind
+                ),
+                style=f"bold {SEVERITY_HEX[Severity.HIGH]}",
+            )
+        )
+        console.print(Text("No check was run against this target; nothing passed.", style="dim"))
+        return
+
     counts = report.counts()
     summary = Text("Findings ")
     for sev in _ORDER:
@@ -116,6 +144,16 @@ def render(
         summary.append(" ")
     console.print(summary)
     console.print()
+
+    for chain in report.chains:
+        ch = Text()
+        ch.append(f" {chain.severity.value.upper():<8} ", style=severity_style(chain.severity, badge=True))
+        ch.append(f" {chain.id}  ", style="bold")
+        ch.append(_plain(chain.title), style="bold")
+        ch.append("  (" + " + ".join(chain.finding_ids) + ")", style="dim")
+        console.print(ch)
+        console.print(Text("    " + _plain(chain.narrative, 800 if verbose else 300)))
+        console.print()
 
     if report.findings:
         for f in report.findings:
@@ -137,15 +175,26 @@ def render(
                 status = Text(worst.value, style=severity_style(worst))
         else:
             status = Text(
-                c.status.value,
+                "n/a" if c.status == CheckStatus.NOT_APPLICABLE else c.status.value,
                 style={
+                    CheckStatus.NOT_APPLICABLE: "dim",
                     CheckStatus.SKIPPED: "dim",
                     CheckStatus.NOT_IMPLEMENTED: "dim italic",
                     CheckStatus.ERROR: f"bold {SEVERITY_HEX[Severity.CRITICAL]}",
                 }.get(c.status, ""),
             )
-        cov.add_row(c.check_id, c.mode.value, status, str(len(c.findings)), Text(_plain(c.reason or "", 70)))
+        reason = (c.reason or "") + (f" [{c.related_to}]" if c.related_to else "")
+        cov.add_row(c.check_id, c.mode.value, status, str(len(c.findings)), Text(_plain(reason, 90)))
     console.print(cov)
+    cv = report.coverage()
+    console.print(
+        Text(
+            f"{cv['passed']} passed, {cv['with_findings']} with findings, {cv['not_applicable']} not applicable "
+            f"(not counted as passed), {cv['skipped']} skipped, {cv['not_implemented']} not implemented, "
+            f"{cv['error']} error",
+            style="dim",
+        )
+    )
 
     if report.attestations:
         gov = Text("Attestation only (not assessable by scan): ", style="bold")

@@ -7,7 +7,7 @@ import json
 import httpx
 import pytest
 
-from mcpprobe import USER_AGENT
+from mcpprobe import USER_AGENT, __version__
 from mcpprobe.authz import (
     AuthorisationError,
     authorise,
@@ -261,7 +261,7 @@ async def test_every_request_carries_user_agent(make_server):
         await run(srv.url)
         agents = {r["headers"].get("user-agent") for r in srv.requests}
     assert agents == {USER_AGENT}
-    assert USER_AGENT.startswith("mcpprobe/0.1.0 (+https://mcpprobe.tech/scanning-policy)")
+    assert USER_AGENT.startswith(f"mcpprobe/{__version__} (+https://mcpprobe.tech/scanning-policy)")
 
 
 def test_rate_ceiling():

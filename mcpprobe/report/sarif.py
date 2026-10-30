@@ -100,10 +100,14 @@ def default_location_uri(report: ScanReport) -> str:
 
 def _result(f: Finding, rule_index: dict[str, int], uri: str) -> dict[str, Any]:
     text = f.description
-    if f.evidence_excerpt:
+    if f.proof:
+        text += f"\n\nProof:\n{f.proof}"
+    elif f.evidence_excerpt:
         text += f"\n\nEvidence: {f.evidence_excerpt}"
     if f.fix:
         text += f"\n\nFix: {f.fix}"
+    if f.verify:
+        text += f"\n\nVerify: {f.verify}"
     result: dict[str, Any] = {
         "ruleId": f.id,
         "level": LEVEL[f.severity],
@@ -124,8 +128,11 @@ def _result(f: Finding, rule_index: dict[str, int], uri: str) -> dict[str, Any]:
             "severity": f.severity.value,
             "confidence": f.confidence.value,
             "standards": f.standards.model_dump(),
-            "evidenceIds": [e.id for e in f.evidence],
+            "evidenceIds": f.evidence_ids or [e.id for e in f.evidence],
             "details": _strip_nulls(f.details),
+            "affected": f.affected,
+            **({"confidenceReason": f.confidence_reason} if f.confidence_reason else {}),
+            **({"verify": f.verify} if f.verify else {}),
         },
     }
     if f.id in rule_index:
@@ -153,7 +160,9 @@ def to_sarif(report: ScanReport, *, location_uri: str | None = None) -> dict[str
             {
                 "level": "note",
                 "message": {
-                    "text": f"{c.check_id}: {c.status.value}" + (f" ({c.reason})" if c.reason else "")
+                    "text": f"{c.check_id}: {c.status.value}"
+                    + (f" ({c.reason})" if c.reason else "")
+                    + (f" [related to {c.related_to}]" if c.related_to else "")
                 },
                 "associatedRule": {"id": c.check_id},
             }
@@ -185,6 +194,15 @@ def to_sarif(report: ScanReport, *, location_uri: str | None = None) -> dict[str
                 "mode": report.mode.value,
                 "fingerprint": report.fingerprint.model_dump(mode="json") if report.fingerprint else None,
                 "counts": report.counts(),
+                "targetKind": report.target_kind,
+                # Only checks that ran and found nothing are passes; not_applicable is not a pass.
+                "coverage": report.coverage(),
+                "passedChecks": [c.check_id for c in report.checks if c.passed],
+                "notApplicableChecks": [
+                    c.check_id for c in report.checks if c.status.value == "not_applicable"
+                ],
+                "chains": [c.model_dump(mode="json") for c in report.chains],
+                "environment": report.environment.model_dump(mode="json") if report.environment else None,
                 "attestationOnly": [
                     {"id": a.id, "title": a.title, "status": a.status} for a in report.attestations
                 ],

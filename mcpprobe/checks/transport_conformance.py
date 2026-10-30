@@ -6,8 +6,10 @@ import itertools
 import secrets
 from typing import Any
 
-from mcpprobe.checks._util import host_of, is_local_or_private, shannon_entropy
-from mcpprobe.checks.base import Check, ScanContext, evidence_of, evidence_summary
+from mcpprobe.checks import proof
+from mcpprobe.checks._util import shannon_entropy
+from mcpprobe.checks.base import Check, NotApplicable, ScanContext, evidence_of, evidence_summary
+from mcpprobe.environment import EDGE_LABELS
 from mcpprobe.models import Confidence, EvidenceRecord, Finding, Severity, Standards
 from mcpprobe.transport import PROTOCOL_2025_11_25, PROTOCOL_2026_07_28, RpcResponse
 from mcpprobe.transport.base import CLIENT_INFO, is_jsonrpc_error_body
@@ -40,51 +42,78 @@ class Trans01OriginValidation(Check):
     applies_to = frozenset({"http"})
     standards = Standards(mcp=["MCP07:2025"])
     description = (
-        "Sends a normal negotiation request with 'Origin: https://evil.example'. The transport "
-        "spec says servers MUST validate Origin and return 403 on an invalid one; otherwise a web "
-        "page can drive a locally running MCP server through the victim's browser (DNS rebinding)."
+        "Sends a normal negotiation request with 'Origin: https://evil.example' and one with "
+        "'Origin: null'. The transport spec says servers MUST validate Origin and return 403 on "
+        "an invalid one; otherwise a web page can drive the server through the victim's browser "
+        "(DNS rebinding). Requests without an Origin header are not tested: non-browser clients "
+        "do not send one."
     )
-    evidence_type = "The POST with the foreign Origin header and the non-403 response."
+    evidence_type = "Each POST with a foreign Origin header and the non-403 response."
     false_positive_notes = (
-        "If the server answers 401 before looking at Origin the check is indeterminate and no "
-        "finding is raised (see scan notes). Reverse proxies that strip Origin will cause a "
-        "finding against the proxied endpoint even if the application validates it."
+        "If the server answers 401 (or 429) before looking at Origin the check is not applicable "
+        "and says so. Reverse proxies that strip Origin will cause a finding against the proxied "
+        "endpoint even if the application validates it."
     )
     fix = (
-        "Reject requests whose Origin is not on an allow-list with HTTP 403 before processing "
-        "the body. For local servers also bind to 127.0.0.1 rather than 0.0.0.0."
+        "Reject any request whose Origin header is present and not on an allow-list with HTTP 403, "
+        "before processing the body, including 'Origin: null'. Allow requests with no Origin header."
     )
 
     async def run(self, ctx: ScanContext) -> list[Finding]:
         http = ctx.http
         if http is None or ctx.fingerprint.flavour == "legacy-sse":
-            return []
+            raise NotApplicable(
+                "the endpoint speaks the legacy HTTP+SSE transport; the Origin probe targets Streamable HTTP."
+            )
         method, params, version = _negotiation_request(ctx)
-        resp = await http.rpc(
-            method,
-            params,
-            protocol_version=version,
-            include_session=False,
-            headers_override={"Origin": EVIL_ORIGIN},
-            note="TRANS-01 foreign Origin",
-        )
-        if resp.status == 403:
+        accepted: list[tuple[str, RpcResponse]] = []
+        blocked: list[str] = []
+        for origin in (EVIL_ORIGIN, "null"):
+            resp = await http.rpc(
+                method,
+                params,
+                protocol_version=version,
+                include_session=False,
+                headers_override={"Origin": origin},
+                note=f"TRANS-01 Origin: {origin}",
+            )
+            if resp.status == 403:
+                continue
+            if resp.status in (401, 429):
+                blocked.append(f"Origin {origin} -> HTTP {resp.status}")
+                continue
+            if resp.status is None:
+                raise RuntimeError(f"Origin probe failed at the transport level: {resp.error_text}")
+            accepted.append((origin, resp))
+        if not accepted:
+            if blocked:
+                ctx.notes.append("TRANS-01: " + "; ".join(blocked))
+                if len(blocked) == 2:
+                    raise NotApplicable(
+                        "The server answered "
+                        + " and ".join(b.split(" -> ")[1] for b in blocked)
+                        + " before Origin validation could be observed; re-run with credentials."
+                    )
             return []
-        if resp.status == 401:
-            ctx.notes.append("TRANS-01: indeterminate, server returned 401 before Origin validation")
-            return []
-        if resp.status is None:
-            return []
-        local = is_local_or_private(host_of(ctx.target))
-        reflected = resp.headers.get("access-control-allow-origin")
-        details: dict[str, Any] = {"status": resp.status, "origin": EVIL_ORIGIN}
+        local = not ctx.is_public
+        first = accepted[0][1]
+        reflected = first.headers.get("access-control-allow-origin")
+        details: dict[str, Any] = {
+            "accepted": {o: r.status for o, r in accepted},
+            "origin": accepted[0][0],
+            "status": first.status,
+        }
         if reflected:
             details["access_control_allow_origin"] = reflected
+        shown = " and ".join(f"Origin: {o} (HTTP {r.status})" for o, r in accepted)
+        fix = self.fix + " Non-browser MCP clients do not send Origin, so an allow-list does not break them."
+        if local:
+            fix += " For a local server, also bind to 127.0.0.1 rather than 0.0.0.0."
         return [
             self.finding(
                 description=(
-                    f"A request with Origin {EVIL_ORIGIN} was answered with HTTP {resp.status} "
-                    f"instead of 403. The server does not validate Origin as the transport spec requires."
+                    f"Requests with {shown} were answered instead of rejected with 403. The server "
+                    "does not validate Origin as the transport spec requires."
                     + (
                         " The server runs on a loopback/private address, where DNS rebinding from a "
                         "browser is the realistic attack path."
@@ -93,15 +122,41 @@ class Trans01OriginValidation(Check):
                     )
                 ),
                 severity=Severity.HIGH if local else Severity.MEDIUM,
-                confidence=Confidence.HIGH if resp.result is not None else Confidence.MEDIUM,
-                evidence=evidence_of(resp),
+                confidence=Confidence.HIGH if first.result is not None else Confidence.MEDIUM,
+                confidence_reason=None
+                if first.result is not None
+                else "The response was not 403 but carried no JSON-RPC result, so the request may still have been refused later.",
+                evidence=evidence_of(*(r for _, r in accepted)),
                 excerpt=evidence_summary(
-                    evidence_of(resp),
-                    f"sent Origin: {EVIL_ORIGIN}; expected 403"
-                    + ("; got a JSON-RPC result" if resp.result is not None else ""),
+                    evidence_of(first),
+                    f"sent Origin: {accepted[0][0]}; expected 403"
+                    + ("; got a JSON-RPC result" if first.result is not None else ""),
                 ),
                 location=ctx.target,
                 details=details,
+                fix=fix,
+                affected=[f"Origin: {o}" for o, _ in accepted],
+                proof="\n\n".join(
+                    proof.exchange(
+                        r.evidence,
+                        request_headers=["origin", "content-type"],
+                        response_headers=["content-type", "access-control-allow-origin"],
+                        result_lines=[
+                            "result: "
+                            + ("JSON-RPC result returned" if r.result is not None else "no JSON-RPC result")
+                        ],
+                    )
+                    for _, r in accepted
+                ),
+                verify=proof.curl_rpc(
+                    ctx.target,
+                    method,
+                    params,
+                    protocol_version=version,
+                    headers={"Origin": EVIL_ORIGIN},
+                    auth_placeholder=ctx.fingerprint.credentials_supplied,
+                    expect="HTTP 403 (repeat with -H 'Origin: null', also 403)",
+                ),
             )
         ]
 
@@ -120,14 +175,22 @@ class Trans02ProtocolVersionHandling(Check):
     evidence_type = "The request with the bogus version header and the response."
     false_positive_notes = (
         "Pre-2025-06-18 servers never defined the header, so an older server that ignores it is "
-        "noted at low severity only."
+        "noted at low severity only. A 401/429 before the header is read makes the check not applicable."
     )
-    fix = "Validate MCP-Protocol-Version against the supported list and reply 400 when it is unknown."
+    fix = (
+        "Validate the MCP-Protocol-Version header against the versions you support and reply 400 "
+        "when it is unknown. Separately, when initialize asks for a protocolVersion you do not "
+        "support, answer with the latest version you do support and let the client decide; never "
+        "echo back whatever the client asked for."
+    )
 
     async def run(self, ctx: ScanContext) -> list[Finding]:
         http = ctx.http
-        if http is None or ctx.fingerprint.flavour in {"legacy-sse", "unknown"}:
-            return []
+        fp = ctx.fingerprint
+        if http is None or fp.flavour == "legacy-sse" or (fp.flavour == "unknown" and not fp.auth_required):
+            raise NotApplicable(
+                "no Streamable HTTP protocol revision was negotiated, so there is no version header to test."
+            )
         method, params, _ = _negotiation_request(ctx)
         resp = await http.rpc(
             method,
@@ -138,8 +201,16 @@ class Trans02ProtocolVersionHandling(Check):
         )
         if resp.status == 400 or (resp.rpc_error is not None) or is_jsonrpc_error_body(resp.body):
             return []
-        if resp.status is None or resp.status in (401, 403):
-            return []
+        if resp.status is None:
+            raise RuntimeError(f"version probe failed at the transport level: {resp.error_text}")
+        if resp.status in (401, 403, 429):
+            raise NotApplicable(
+                f"The server answered HTTP {resp.status} before the version header could be "
+                "evaluated; re-run with credentials."
+            )
+        echoed = None
+        if isinstance(resp.result, dict) and resp.result.get("protocolVersion") == BOGUS_VERSION:
+            echoed = BOGUS_VERSION
         return [
             self.finding(
                 description=(
@@ -148,12 +219,34 @@ class Trans02ProtocolVersionHandling(Check):
                 ),
                 severity=Severity.LOW,
                 confidence=Confidence.HIGH if resp.result is not None else Confidence.MEDIUM,
+                confidence_reason=None
+                if resp.result is not None
+                else "The response was not 400 but carried no JSON-RPC result.",
                 evidence=evidence_of(resp),
                 excerpt=evidence_summary(
                     evidence_of(resp), f"sent MCP-Protocol-Version: {BOGUS_VERSION}; expected 400"
                 ),
                 location=ctx.target,
                 details={"status": resp.status},
+                affected=["MCP-Protocol-Version"],
+                proof=proof.exchange(
+                    resp.evidence,
+                    request_headers=["mcp-protocol-version", "content-type"],
+                    response_headers=["content-type"],
+                    result_lines=[
+                        "result: "
+                        + ("JSON-RPC result returned" if resp.result is not None else "no JSON-RPC result")
+                    ]
+                    + ([f"result.protocolVersion: {echoed} (unknown version echoed back)"] if echoed else []),
+                ),
+                verify=proof.curl_rpc(
+                    ctx.target,
+                    method,
+                    params,
+                    protocol_version=BOGUS_VERSION,
+                    auth_placeholder=ctx.fingerprint.credentials_supplied,
+                    expect="HTTP 400",
+                ),
             )
         ]
 
@@ -183,8 +276,17 @@ class Trans03SessionIdQuality(Check):
     async def run(self, ctx: ScanContext) -> list[Finding]:
         http = ctx.http
         fp = ctx.fingerprint
-        if http is None or fp.flavour != "handshake" or not fp.session_id_seen:
-            return []
+        if http is None:
+            raise NotApplicable("not an HTTP target.")
+        if fp.flavour == "stateless-2026":
+            raise NotApplicable(
+                "The 2026-07-28 revision has no sessions, so there is no Mcp-Session-Id to assess."
+            )
+        if fp.flavour != "handshake" or not fp.session_id_seen:
+            raise NotApplicable(
+                "The server issued no Mcp-Session-Id during initialize (stateless transport), so "
+                "there is no session identifier to assess."
+            )
         findings: list[Finding] = []
         version = fp.protocol_version or PROTOCOL_2025_11_25
         ids: list[str] = list(http.sessions_seen)
@@ -236,6 +338,12 @@ class Trans03SessionIdQuality(Check):
                         "samples": [s[:8] + "…" if len(s) > 8 else s for s in ids],
                         "problems": problems,
                     },
+                    affected=["Mcp-Session-Id"],
+                    proof="Mcp-Session-Id values issued by successive initialize requests:\n"
+                    + "\n".join(f"  {s}" for s in ids)
+                    + "\nProblems:\n"
+                    + "\n".join(f"  - {p}" for p in problems),
+                    verify=proof.rescan(ctx.target, self.id),
                 )
             )
         forged = secrets.token_urlsafe(24)
@@ -261,6 +369,24 @@ class Trans03SessionIdQuality(Check):
                         evidence_of(resp), "tools/list with a never-issued Mcp-Session-Id returned a result"
                     ),
                     location=ctx.target,
+                    affected=["Mcp-Session-Id"],
+                    proof=proof.exchange(
+                        resp.evidence,
+                        request_headers=["mcp-session-id"],
+                        response_headers=["content-type"],
+                        result_lines=[
+                            "result: JSON-RPC result returned for a session the server never issued"
+                        ],
+                    ),
+                    verify=proof.curl_rpc(
+                        ctx.target,
+                        "tools/list",
+                        {},
+                        protocol_version=version,
+                        headers={"Mcp-Session-Id": "forged-session-id"},
+                        auth_placeholder=fp.credentials_supplied,
+                        expect="HTTP 404",
+                    ),
                 )
             )
         return findings
@@ -285,8 +411,9 @@ class Trans04DeprecatedTransport(Check):
         http = ctx.http
         fp = ctx.fingerprint
         if http is None:
-            return []
+            raise NotApplicable("not an HTTP target.")
         findings: list[Finding] = []
+        sse_verify = f"curl -s -N -m 3 -H 'Accept: text/event-stream' {ctx.target} | head -3  # expect no 'event: endpoint'"
         if fp.flavour == "legacy-sse":
             ev = [ctx.evidence.records[-1]] if ctx.evidence.records else []
             findings.append(
@@ -296,10 +423,19 @@ class Trans04DeprecatedTransport(Check):
                     confidence=Confidence.HIGH,
                     evidence=ev,
                     location=ctx.target,
+                    proof=proof.exchange(ev[0] if ev else None, response_headers=["content-type"]),
+                    verify=sse_verify,
                 )
             )
             return findings
         resp = await http.legacy_sse_probe()
+        if resp.status is None:
+            raise RuntimeError(f"legacy SSE probe failed at the transport level: {resp.error_text}")
+        if resp.status in (401, 403, 429) and fp.protocol_version is None:
+            raise NotApplicable(
+                f"The GET probe for the legacy transport was answered with HTTP {resp.status}, so it "
+                "could not be determined whether the deprecated HTTP+SSE transport is served."
+            )
         if resp.status == 200 and "text/event-stream" in resp.headers.get("content-type", ""):
             if _first_event_name(resp.body) == "endpoint":
                 findings.append(
@@ -310,6 +446,12 @@ class Trans04DeprecatedTransport(Check):
                         confidence=Confidence.HIGH,
                         evidence=evidence_of(resp),
                         location=ctx.target,
+                        proof=proof.exchange(
+                            resp.evidence,
+                            response_headers=["content-type"],
+                            result_lines=["first SSE event: endpoint"],
+                        ),
+                        verify=sse_verify,
                     )
                 )
         if fp.protocol_version and fp.protocol_version < "2025-06-18":
@@ -321,6 +463,15 @@ class Trans04DeprecatedTransport(Check):
                     severity=Severity.INFO,
                     confidence=Confidence.HIGH,
                     location=ctx.target,
+                    proof=f"initialize result.protocolVersion: {fp.protocol_version}",
+                    verify=proof.curl_rpc(
+                        ctx.target,
+                        "initialize",
+                        proof.initialize_params(),
+                        include_headers=False,
+                        jq=".result.protocolVersion",
+                        expect="2025-06-18 or later",
+                    ),
                 )
             )
         return findings
@@ -344,18 +495,25 @@ class Trans05TlsAndHeaders(Check):
     )
     fix = (
         "Serve the endpoint over HTTPS with TLS 1.2+ only, add Strict-Transport-Security and "
-        "X-Content-Type-Options: nosniff."
+        "X-Content-Type-Options: nosniff. Where an edge (API Gateway, CloudFront, Cloudflare, "
+        "Vercel) is detected the fix text says where to configure it."
     )
 
     async def run(self, ctx: ScanContext) -> list[Finding]:
         http = ctx.http
         if http is None:
-            return []
+            raise NotApplicable("not an HTTP target.")
         findings: list[Finding] = []
-        host = host_of(ctx.target)
-        local = is_local_or_private(host)
+        local = not ctx.is_public
         scheme = ctx.target.split(":", 1)[0].lower()
         sample = _sample_evidence(ctx)
+        edge = ctx.environment.edge
+        edge_label = EDGE_LABELS.get(edge or "", "")
+        verify_headers = (
+            f"curl -s -D - -o /dev/null -X POST {ctx.target} -H 'content-type: application/json' "
+            '-d \'{"jsonrpc":"2.0","id":1,"method":"ping"}\' '
+            "| grep -iE 'strict-transport-security|x-content-type-options'  # expect both headers"
+        )
         if scheme == "http":
             findings.append(
                 self.finding(
@@ -375,6 +533,10 @@ class Trans05TlsAndHeaders(Check):
                     excerpt=f"target URL scheme is http: {ctx.target}",
                     location=ctx.target,
                     details={"scheme": scheme, "local": local},
+                    fix="Serve the endpoint over HTTPS only (TLS 1.2 or later) and redirect or refuse plain HTTP.",
+                    affected=[ctx.target],
+                    proof=f"target URL: {ctx.target} (scheme http)",
+                    verify=f"curl -sI {ctx.target.replace('http://', 'https://', 1)}  # expect a TLS response; plain http should be refused or redirected",
                 )
             )
         if http.tls_version and http.tls_version in {"TLSv1", "TLSv1.1", "SSLv3"}:
@@ -386,38 +548,91 @@ class Trans05TlsAndHeaders(Check):
                     confidence=Confidence.HIGH,
                     location=ctx.target,
                     details={"tls_version": http.tls_version},
+                    fix=_tls_fix(edge, edge_label),
+                    affected=[http.tls_version],
+                    proof=f"negotiated TLS version: {http.tls_version}",
+                    verify=f"curl -sI --tls-max 1.1 {ctx.target}  # expect a TLS handshake failure",
                 )
             )
-        if sample is not None:
-            headers = sample.response_headers
-            missing = []
-            if scheme == "https" and "strict-transport-security" not in headers:
-                missing.append("Strict-Transport-Security")
-            if "x-content-type-options" not in headers:
-                missing.append("X-Content-Type-Options")
-            if missing:
-                findings.append(
-                    self.finding(
-                        title="Security headers missing on MCP endpoint",
-                        description="Responses lack: " + ", ".join(missing) + ".",
-                        severity=Severity.LOW if scheme == "https" else Severity.INFO,
-                        confidence=Confidence.HIGH,
-                        evidence=[sample],
-                        excerpt=evidence_summary(
-                            [sample],
-                            "response headers: "
-                            + (
-                                ", ".join(f"{k}: {v}" for k, v in sorted(headers.items())[:6])
-                                or "(none kept)"
-                            )
-                            + "; missing "
-                            + ", ".join(missing),
-                        ),
-                        location=ctx.target,
-                        details={"missing": missing},
-                    )
+        if sample is None:
+            if findings:
+                return findings
+            raise NotApplicable(
+                "no response from the MCP endpoint was captured, so its headers could not be inspected."
+            )
+        headers = sample.response_headers
+        required = (["Strict-Transport-Security"] if scheme == "https" else []) + ["X-Content-Type-Options"]
+        missing = [h for h in required if h.lower() not in headers]
+        if missing:
+            proof_text = proof.header_set(sample, required)
+            proof_text += f"\nTLS version: {http.tls_version or 'not observed'}"
+            if edge_label:
+                proof_text += f"\nEdge: {edge_label} (identified by {', '.join(ctx.environment.signals)})"
+            findings.append(
+                self.finding(
+                    title="Security headers missing on MCP endpoint",
+                    description="Responses lack: " + ", ".join(missing) + ".",
+                    severity=Severity.LOW if scheme == "https" else Severity.INFO,
+                    confidence=Confidence.HIGH,
+                    evidence=[sample],
+                    excerpt=evidence_summary(
+                        [sample],
+                        "response headers: "
+                        + (", ".join(f"{k}: {v}" for k, v in sorted(headers.items())) or "(none)")
+                        + "; missing "
+                        + ", ".join(missing),
+                    ),
+                    location=ctx.target,
+                    details={"missing": missing, "headers_seen": sorted(headers)},
+                    fix=_headers_fix(missing, edge, edge_label),
+                    affected=missing,
+                    proof=proof_text,
+                    verify=verify_headers,
                 )
+            )
         return findings
+
+
+def _tls_fix(edge: str | None, label: str) -> str:
+    if edge == "aws-api-gateway":
+        return (
+            f"The endpoint sits behind {label}: TLS is terminated there, not in application code. "
+            "Set the custom domain's security policy to TLS 1.2 or later."
+        )
+    if edge == "cloudflare":
+        return "Set Minimum TLS Version to 1.2 under SSL/TLS > Edge Certificates in Cloudflare."
+    if edge == "aws-cloudfront":
+        return "Use a CloudFront viewer security policy of TLSv1.2_2021 or later."
+    return "Allow only TLS 1.2 and 1.3 on the server or load balancer that terminates TLS."
+
+
+def _headers_fix(missing: list[str], edge: str | None, label: str) -> str:
+    want = []
+    if "Strict-Transport-Security" in missing:
+        want.append("Strict-Transport-Security: max-age=63072000; includeSubDomains")
+    if "X-Content-Type-Options" in missing:
+        want.append("X-Content-Type-Options: nosniff")
+    base = "Add " + " and ".join(want) + " to every response, including errors (401/403/404)."
+    if edge == "aws-api-gateway":
+        return (
+            base + f" The apigw-requestid header shows {label} in front: TLS is already terminated there "
+            "(keep the custom domain's security policy at TLS 1.2 or later), so set these headers in "
+            "the application's responses, or put CloudFront in front with a response headers policy "
+            "that adds them."
+        )
+    if edge == "aws-cloudfront":
+        return (
+            base
+            + " Attach a CloudFront response headers policy (for example the managed SecurityHeadersPolicy)."
+        )
+    if edge == "cloudflare":
+        return (
+            base
+            + " In Cloudflare, enable HSTS under SSL/TLS > Edge Certificates and add nosniff with a response header Transform Rule."
+        )
+    if edge == "vercel":
+        return base + " On Vercel, add them with the 'headers' setting in vercel.json."
+    return base
 
 
 def _sample_evidence(ctx: ScanContext) -> EvidenceRecord | None:

@@ -7,7 +7,9 @@ import json
 import re
 from typing import Any
 
-from mcpprobe.checks.base import Check, ScanContext, evidence_of, evidence_summary
+from mcpprobe.checks import proof
+from mcpprobe.checks.base import Check, NotApplicable, ScanContext, evidence_of, evidence_summary
+from mcpprobe.environment import EDGE_LABELS
 from mcpprobe.models import Confidence, Finding, Severity, Standards
 from mcpprobe.transport import HttpTransport, RpcResponse, StdioTransport
 
@@ -115,12 +117,21 @@ class Err01VerboseErrors(Check):
                 )
             )
 
+        if responses and all(r.status in (401, 403) for r in responses):
+            raise NotApplicable(
+                "Every malformed request was rejected at authentication (HTTP 401/403), so the "
+                "server's error handling behind authentication could not be observed; re-run with credentials."
+            )
+        if responses and all(r.status is None and not r.body for r in responses):
+            raise RuntimeError("every malformed request failed at the transport level")
         leaks: dict[str, list[str]] = {}
+        leak_proof: list[str] = []
         for resp in responses:
             text = resp.body.decode("utf-8", errors="replace")
             cats = inspect_error_body(text)
             if cats:
                 leaks[resp.method] = cats
+                leak_proof.append(_leak_proof(resp, text, cats))
         if leaks:
             all_cats = sorted({c for cs in leaks.values() for c in cs})
             only_version = all_cats == ["framework version"]
@@ -136,6 +147,15 @@ class Err01VerboseErrors(Check):
                     evidence=evidence_of(*[r for r in responses if r.method in leaks]),
                     location=ctx.target,
                     details={"leaks": leaks},
+                    affected=list(leaks),
+                    proof="\n\n".join(leak_proof),
+                    verify=(
+                        f"curl -s -X POST {ctx.target} -H 'content-type: application/json' "
+                        '-d \'{"jsonrpc": "2.0", "id": 9001, "method": \'  '
+                        "# expect a generic -32700 Parse error with no stack trace, path or version"
+                    )
+                    if ctx.http is not None
+                    else proof.rescan(ctx.target, self.id, stdio=True),
                 )
             )
         server_header = next((r.headers.get("server") for r in responses if r.headers.get("server")), None)
@@ -149,9 +169,32 @@ class Err01VerboseErrors(Check):
                     evidence=evidence_of(responses[0]) if responses else [],
                     location=ctx.target,
                     details={"server": server_header},
+                    affected=["Server"],
+                    proof=f"response header: server: {server_header}",
+                    verify=f"curl -s -D - -o /dev/null {ctx.target} | grep -i '^server:'  # expect no version number",
                 )
             )
         return findings
+
+
+def _leak_proof(resp: RpcResponse, text: str, cats: list[str]) -> str:
+    head = f"[{resp.evidence.id if resp.evidence else '?'}] {resp.method} -> " + (
+        f"HTTP {resp.status}" if resp.status is not None else "stdio"
+    )
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        parsed = None
+    if parsed is not None and len(text) <= 16384:
+        body = proof.indent(proof.pretty(parsed))
+    else:
+        hits = [
+            line
+            for line in text.splitlines()
+            if any(p.search(line) for _, p in _STACK_PATTERNS) or _FRAMEWORK_VERSION.search(line)
+        ]
+        body = "\n".join(f"  {line}" for line in hits) + f"\n  ({len(text.splitlines())} lines in total)"
+    return f"{head}\nleaks: {', '.join(cats)}\nresponse body:\n{body}"
 
 
 # --------------------------------------------------------------------------- DOS-01
@@ -192,6 +235,28 @@ class Dos01UnboundedConsumption(Check):
         "promptly, and rate-limit per client/session with 429 and Retry-After."
     )
 
+    def _fix(self, ctx: ScanContext) -> str:
+        edge = ctx.environment.edge
+        label = EDGE_LABELS.get(edge or "", "")
+        if edge == "aws-api-gateway":
+            return (
+                self.fix + f" {label} is in front (apigw-requestid header): set stage or route throttling "
+                "(rate and burst) there, which answers 429 before your code runs. The gateway's own "
+                "payload cap (10 MB) is far above what an MCP request needs, so still enforce a 1 MB "
+                "limit and a JSON depth limit in the handler."
+            )
+        if edge == "cloudflare":
+            return (
+                self.fix
+                + " On Cloudflare, a rate limiting rule on the MCP path can return the 429 at the edge."
+            )
+        if edge == "aws-cloudfront":
+            return (
+                self.fix
+                + " With CloudFront in front, an AWS WAF rate-based rule can return the 429 at the edge."
+            )
+        return self.fix
+
     async def run(self, ctx: ScanContext) -> list[Finding]:
         findings: list[Finding] = []
         t = ctx.transport
@@ -215,6 +280,14 @@ class Dos01UnboundedConsumption(Check):
                         description=f"The {label} probe produced: {problem}. Input limits may be missing.",
                         severity=Severity.LOW if "slow" in problem else Severity.MEDIUM,
                         confidence=Confidence.MEDIUM,
+                        confidence_reason=(
+                            "A single slow or failing response can be transient; the probe was sent once."
+                        ),
+                        fix=self._fix(ctx),
+                        affected=[label],
+                        proof=proof.exchange(resp.evidence, response_headers=["content-type", "retry-after"])
+                        + f"\nelapsed: {resp.elapsed_ms:.0f} ms; problem: {problem}",
+                        verify=proof.rescan(ctx.target, self.id, stdio=ctx.http is None),
                         evidence=evidence_of(resp),
                         excerpt=evidence_summary(
                             evidence_of(resp), f"{label} probe -> {problem} after {resp.elapsed_ms:.0f} ms"
@@ -232,6 +305,12 @@ class Dos01UnboundedConsumption(Check):
             statuses.append(resp.status)
             if resp.status == 429:
                 break
+        all_probe_statuses = [big.status, deep.status, *statuses]
+        if isinstance(t, HttpTransport) and all(s in (401, 403) for s in all_probe_statuses):
+            raise NotApplicable(
+                "Every probe was rejected at authentication (HTTP 401/403), so limits behind "
+                "authentication could not be observed; re-run with credentials."
+            )
         if isinstance(t, HttpTransport):
             if 429 in statuses:
                 ctx.notes.append(f"DOS-01: rate limiting observed after {statuses.index(429) + 1} requests")
@@ -243,7 +322,37 @@ class Dos01UnboundedConsumption(Check):
                         "(no 429). Indicative only; the scanner never exceeds its own cap.",
                         severity=Severity.INFO,
                         confidence=Confidence.LOW,
-                        evidence=evidence_of(burst_responses[-1]) if burst_responses else [],
+                        confidence_reason=(
+                            f"Indicative only: the burst stays inside the scanner's own cap of "
+                            f"{t.limiter.rate:g} req/s, and many well-run servers legitimately allow that rate."
+                        ),
+                        fix=self._fix(ctx),
+                        affected=["rate limiting"],
+                        proof=(
+                            f"{len(statuses)} x tools/list at {t.limiter.rate:g} req/s\nstatuses: "
+                            + ", ".join(
+                                f"HTTP {st} x{statuses.count(st)}"
+                                if st
+                                else f"no response x{statuses.count(st)}"
+                                for st in sorted(set(statuses), key=lambda v: v or 0)
+                            )
+                            + "\nno 429 and no Retry-After header observed\n\n"
+                            + proof.exchange(
+                                burst_responses[-1].evidence if burst_responses else None,
+                                request_headers=["content-type"],
+                                response_headers=["content-type", "retry-after"],
+                            )
+                        ),
+                        verify=(
+                            "for i in $(seq 1 50); do "
+                            + proof.curl_rpc(ctx.target, "ping", None, include_headers=False).replace(
+                                "curl -s ", "curl -s -o /dev/null -w '%{http_code}\\n' ", 1
+                            )
+                            + "; done | sort | uniq -c  # expect some 429 responses"
+                        ),
+                        evidence=evidence_of(burst_responses[0], burst_responses[-1])
+                        if burst_responses
+                        else [],
                         excerpt=f"{len(statuses)} x tools/list at {t.limiter.rate:g} req/s, statuses: "
                         + ", ".join(sorted({str(s) for s in statuses})),
                         location=ctx.target,

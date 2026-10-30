@@ -37,6 +37,8 @@ from mcpprobe.transport import TransportError, ensure_url
 EXIT_CLEAN = 0
 EXIT_FINDINGS = 1
 EXIT_ERROR = 2
+#: The target answered, but not as an MCP server (e.g. an ordinary web site). No check ran.
+EXIT_NOT_MCP = 3
 
 SEVERITIES = [s.value for s in Severity]
 
@@ -237,6 +239,15 @@ def scan_cmd(
     if sarif_path:
         write_sarif(report, sarif_path, location_uri=sarif_location)
     threshold = Severity(fail_on)
+    if report.target_kind != "mcp":
+        if not quiet:
+            render(report, Console(), verbose=verbose, show_evidence=True)
+        err.print(
+            report.fingerprint.error if report.fingerprint else report.target_kind,
+            markup=False,
+            highlight=False,
+        )
+        sys.exit(EXIT_NOT_MCP if report.target_kind == "not_mcp" else EXIT_ERROR)
     if not quiet:
         render(report, Console(), verbose=verbose, show_evidence=True, fail_on=threshold)
         outputs = (

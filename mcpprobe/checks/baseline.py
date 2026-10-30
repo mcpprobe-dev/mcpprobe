@@ -7,8 +7,9 @@ import json
 from pathlib import Path
 from typing import Any
 
+from mcpprobe.checks import proof
 from mcpprobe.checks._util import canonical_json
-from mcpprobe.checks.base import Check, ScanContext
+from mcpprobe.checks.base import Check, NotApplicable, ScanContext
 from mcpprobe.models import Confidence, Finding, Severity, Standards, utcnow
 
 BASELINE_FORMAT_VERSION = 1
@@ -100,6 +101,7 @@ class Meta02RugPullBaseline(Check):
     )
 
     async def run(self, ctx: ScanContext) -> list[Finding]:
+        ctx.require_metadata()
         findings: list[Finding] = []
         current = build_snapshot(ctx)
         ctx.shared["baseline_current"] = current
@@ -118,12 +120,23 @@ class Meta02RugPullBaseline(Check):
                     severity=Severity.INFO,
                     confidence=Confidence.HIGH,
                     location="capabilities.tools.listChanged",
+                    affected=["capabilities.tools.listChanged"],
+                    proof=f"negotiated capabilities.tools: {json.dumps(tools_caps)}",
+                    verify=proof.rescan(ctx.target, self.id, stdio=ctx.http is None).replace(
+                        "--only", "--baseline mcpprobe-baseline.json --only"
+                    ),
                 )
             )
         path = ctx.options.baseline_path
         if not path:
-            return findings
+            if findings:
+                return findings
+            raise NotApplicable(
+                "No baseline was supplied (--baseline), so a change in the tool surface cannot be "
+                "detected on a single scan; the server does not advertise listChanged."
+            )
         file = Path(path)
+        compared = False
         if file.exists():
             try:
                 previous = json.loads(file.read_text("utf-8"))
@@ -137,6 +150,7 @@ class Meta02RugPullBaseline(Check):
                     )
                 diff = diff_snapshots(previous, current)
                 findings.extend(self._findings_from_diff(ctx, diff, previous))
+                compared = True
         if ctx.options.write_baseline:
             try:
                 file.parent.mkdir(parents=True, exist_ok=True)
@@ -144,6 +158,11 @@ class Meta02RugPullBaseline(Check):
                 ctx.notes.append(f"META-02: baseline written to {path}")
             except OSError as exc:
                 ctx.notes.append(f"META-02: could not write baseline {path}: {exc}")
+        if not compared and not findings:
+            raise NotApplicable(
+                f"No usable previous baseline at {path} (first scan); the current surface was "
+                "recorded and changes can be detected from the next scan."
+            )
         return findings
 
     def _findings_from_diff(
@@ -216,4 +235,16 @@ class Meta02RugPullBaseline(Check):
                     location="initialize.instructions",
                 )
             )
+        verify = proof.rescan(ctx.target, self.id, stdio=ctx.http is None).replace(
+            "--only", f"--baseline {ctx.options.baseline_path} --no-write-baseline --only"
+        )
+        for f in out:
+            if not f.proof:
+                f.proof = (
+                    f"baseline from {previous.get('created_at')} compared with this scan:\n"
+                    + proof.indent(proof.pretty(f.details or {"location": f.location}))
+                )
+            f.verify = verify
+            if f.location and f.location.startswith("tools[") and not f.affected:
+                f.affected = [f.location[6:-1]]
         return out

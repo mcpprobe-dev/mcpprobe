@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 from mcpprobe.models import (
     CheckMode,
     Confidence,
+    Environment,
     EvidenceRecord,
     Finding,
     Fingerprint,
@@ -33,6 +34,20 @@ if TYPE_CHECKING:
 #: Signature of the optional LLM-judge hook. It receives the text under review
 #: and a short task description and returns ``None`` (abstain) or a verdict.
 JudgeFn = Callable[[str, str], "JudgeVerdict | None"]
+
+
+class NotApplicable(Exception):  # noqa: N818 - it is an outcome, not an error
+    """Raised by a check whose preconditions are absent, so there is nothing to test.
+
+    The orchestrator records the check as ``not_applicable`` with ``reason``
+    (one plain sentence) and, when another finding is the cause, ``related_to``
+    (e.g. ``"AUTH-01"``). A not-applicable check never counts as a pass.
+    """
+
+    def __init__(self, reason: str, related_to: str | None = None) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.related_to = related_to
 
 
 @dataclass(slots=True)
@@ -77,6 +92,7 @@ class ScanContext:
         evidence: EvidenceLog,
         options: ScanOptions | None = None,
         authorisation: AuthorisationRecord | None = None,
+        environment: Environment | None = None,
     ) -> None:
         self.target = target
         self.transport = transport
@@ -86,6 +102,7 @@ class ScanContext:
         self.options = options or ScanOptions()
         self.authorisation = authorisation
         self.notes: list[str] = []
+        self.environment = environment or Environment()
         #: Scratch space for checks to share derived data (e.g. META-03 classes).
         self.shared: dict[str, Any] = {}
 
@@ -108,6 +125,27 @@ class ScanContext:
 
     def tool_names(self) -> list[str]:
         return [str(t.get("name", "")) for t in self.inventory.tools]
+
+    @property
+    def is_public(self) -> bool:
+        return self.environment.public
+
+    def require_metadata(self) -> None:
+        """Raise :class:`NotApplicable` when no tool/prompt/resource metadata could be listed."""
+        inv = self.inventory
+        if inv.tools or inv.prompts or inv.resources or self.fingerprint.instructions:
+            return
+        if self.fingerprint.auth_required and not self.fingerprint.credentials_supplied:
+            raise NotApplicable(
+                "tools/list requires authentication and no credentials were supplied, so no tool "
+                "metadata could be read; re-run with --header 'Authorization: Bearer ...' to assess it.",
+                related_to=None,
+            )
+        if inv.tools_error:
+            raise NotApplicable(f"the tool list could not be read ({inv.tools_error}).")
+        raise NotApplicable(
+            "the server lists no tools, prompts or resources, so there is no metadata to assess."
+        )
 
 
 class Check(abc.ABC):
@@ -145,13 +183,20 @@ class Check(abc.ABC):
         details: dict[str, Any] | None = None,
         title: str | None = None,
         excerpt: str | None = None,
+        confidence_reason: str | None = None,
+        verify: str | None = None,
+        affected: list[str] | None = None,
+        proof: str = "",
     ) -> Finding:
         """Build a :class:`Finding` pre-filled from the check's metadata.
 
         ``excerpt`` overrides the evidence excerpt that is otherwise derived from
-        the first evidence record.
+        the first evidence record. A finding whose confidence is not high must
+        say why (``confidence_reason``); this is enforced so no label goes unexplained.
         """
         records = [e for e in (evidence or []) if e is not None]
+        if confidence != Confidence.HIGH and not confidence_reason:
+            raise ValueError(f"{self.id}: confidence {confidence.value} needs a confidence_reason")
         return Finding(
             id=self.id,
             title=title or self.title,
@@ -165,6 +210,11 @@ class Check(abc.ABC):
             location=location,
             details=details or {},
             false_positive_notes=self.false_positive_notes or None,
+            confidence_reason=confidence_reason,
+            verify=verify,
+            affected=list(affected or []),
+            proof=proof,
+            evidence_ids=_unique_ids(records),
         )
 
     def applies(self, ctx: ScanContext) -> bool:
@@ -185,6 +235,14 @@ class ActiveCheck(Check):
     def require_active(ctx: ScanContext) -> None:
         if not ctx.active_allowed:
             raise PermissionError("active check requires --active with a verified authorisation record")
+
+
+def _unique_ids(records: list[EvidenceRecord]) -> list[str]:
+    out: list[str] = []
+    for r in records:
+        if r.id not in out:
+            out.append(r.id)
+    return out
 
 
 EXCERPT_BODY_CHARS = 240

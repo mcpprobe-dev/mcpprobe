@@ -32,9 +32,40 @@ async def test_auth01_silent_when_auth_required(make_server):
     assert report.fingerprint.auth_required
 
 
+async def test_auth02_unauthenticated_server_without_metadata_is_a_finding(make_server):
+    async with make_server(serve_prm=False) as srv:
+        report = await run(srv.url, only=["AUTH-02", "AUTH-03", "AUTH-04"])
+    [f] = by_id(report, "AUTH-02")
+    assert f.severity == Severity.LOW  # loopback; medium on a public host
+    assert "HTTP 404" in f.proof
+    for cid in ("AUTH-03", "AUTH-04"):
+        st = status_of(report, cid)
+        assert st.status.value == "not_applicable" and st.related_to == "AUTH-01" and st.reason
+
+
+async def test_auth01_credentials_supplied_and_enforced(make_server):
+    from tests.fake_server import VALID_TOKEN
+
+    async with make_server(require_auth=True) as srv:
+        report = await run(srv.url, headers={"Authorization": f"Bearer {VALID_TOKEN}"})
+    assert report.fingerprint.credentials_supplied and report.fingerprint.auth_required
+    assert by_id(report, "AUTH-01") == [] and status_of(report, "AUTH-01").passed
+    assert by_id(report, "AUTH-04") == []  # query-string probe must not reuse the operator's token
+    assert report.inventory_summary["tools"] == 2  # metadata assessed with the supplied credentials
+
+
+async def test_auth01_credentials_supplied_but_not_needed(make_server):
+    async with make_server() as srv:
+        report = await run(srv.url, only=["AUTH-01"], headers={"Authorization": "Bearer whatever"})
+    [f] = by_id(report, "AUTH-01")
+    assert "credentials removed" in f.description
+
+
 async def test_auth02_missing_prm(make_server):
     async with make_server(require_auth=True, serve_prm=False, advertise_prm_in_401=False) as srv:
-        report = await run(srv.url, only=["AUTH-02"])
+        report = await run(srv.url, only=["AUTH-02", "AUTH-03"])
+    st = status_of(report, "AUTH-03")
+    assert st.status.value == "not_applicable" and st.related_to == "AUTH-02"
     f = by_id(report, "AUTH-02")
     assert len(f) == 1
     assert f[0].severity == Severity.HIGH
@@ -114,6 +145,13 @@ async def test_auth04_secure_server_clean(make_server):
     assert status_of(report, "AUTH-04").status.value == "ran"
 
 
+async def test_auth04_not_applicable_without_auth(make_server):
+    async with make_server() as srv:
+        report = await run(srv.url, only=["AUTH-04"])
+    st = status_of(report, "AUTH-04")
+    assert st.status.value == "not_applicable" and st.related_to == "AUTH-01"
+
+
 async def test_auth_checks_skipped_for_stdio():
     from tests.conftest import stdio_command
 
@@ -142,6 +180,7 @@ async def test_auth03_honours_third_party_opt_out(make_server, monkeypatch):
     async with make_server(require_auth=True, prm_authorization_servers=[issuer]) as srv:
         report = await run(srv.url, only=["AUTH-02", "AUTH-03"], txt_lookup=lookup)
     assert by_id(report, "AUTH-03") == []
+    assert status_of(report, "AUTH-03").status.value == "not_applicable"
     assert any("auth.example.test has opted out" in n for n in report.notes)
     assert "auth.example.test" not in contacted
 

@@ -14,6 +14,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
+from mcpprobe import __version__
 from mcpprobe.models import EvidenceRecord
 from mcpprobe.transport.evidence import EvidenceLog
 from mcpprobe.transport.ratelimit import RateLimiter
@@ -37,7 +38,7 @@ HANDSHAKE_VERSIONS: frozenset[str] = frozenset({PROTOCOL_2025_11_25, PROTOCOL_20
 #: ``_meta`` key carrying the protocol version in 2026-07-28 requests.
 META_VERSION_KEY = "io.modelcontextprotocol/protocolVersion"
 
-CLIENT_INFO: dict[str, str] = {"name": "mcpprobe", "version": "0.1.0"}
+CLIENT_INFO: dict[str, str] = {"name": "mcpprobe", "version": __version__}
 
 
 class TransportError(Exception):

@@ -27,7 +27,17 @@ async def test_trans01_indeterminate_behind_auth(make_server):
     async with make_server(require_auth=True, origin_check=False) as srv:
         report = await run(srv.url, only=["TRANS-01"])
     assert by_id(report, "TRANS-01") == []
-    assert any("TRANS-01: indeterminate" in n for n in report.notes)
+    st = status_of(report, "TRANS-01")
+    assert st.status.value == "not_applicable"
+    assert "401" in (st.reason or "") and "before Origin validation" in (st.reason or "")
+
+
+async def test_trans01_origin_null_accepted(make_server):
+    async with make_server(allow_null_origin=True) as srv:
+        report = await run(srv.url, only=["TRANS-01"])
+    [f] = by_id(report, "TRANS-01")
+    assert f.affected == ["Origin: null"]
+    assert "Origin: null" in f.fix and "no Origin header" in f.fix
 
 
 async def test_trans02_bogus_version_accepted(make_server):
@@ -78,7 +88,15 @@ async def test_trans03_not_applicable_to_stateless(make_server):
     async with make_server(stateless_2026=True, session_mode="none") as srv:
         report = await run(srv.url, only=["TRANS-03"])
     assert by_id(report, "TRANS-03") == []
-    assert status_of(report, "TRANS-03").status.value == "ran"
+    st = status_of(report, "TRANS-03")
+    assert st.status.value == "not_applicable" and "no sessions" in (st.reason or "")
+
+
+async def test_trans03_not_applicable_without_session_id(make_server):
+    async with make_server(session_mode="none") as srv:
+        report = await run(srv.url, only=["TRANS-03"])
+    st = status_of(report, "TRANS-03")
+    assert st.status.value == "not_applicable" and "Mcp-Session-Id" in (st.reason or "")
 
 
 async def test_trans04_legacy_sse_only(make_server):

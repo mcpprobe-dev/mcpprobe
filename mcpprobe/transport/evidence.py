@@ -8,60 +8,36 @@ from collections.abc import Iterable, Mapping
 from mcpprobe.models import EVIDENCE_BODY_LIMIT, EvidenceRecord, utcnow
 from mcpprobe.redact import redact_secrets, redact_url
 
-#: Response headers worth keeping in evidence (lower-case).
-KEPT_RESPONSE_HEADERS: frozenset[str] = frozenset(
-    {
-        "content-type",
-        "content-length",
-        "www-authenticate",
-        "mcp-session-id",
-        "mcp-protocol-version",
-        "server",
-        "x-powered-by",
-        "strict-transport-security",
-        "x-content-type-options",
-        "x-frame-options",
-        "content-security-policy",
-        "cache-control",
-        "retry-after",
-        "location",
-        "access-control-allow-origin",
-        "access-control-allow-credentials",
-        "allow",
-        "date",
-    }
-)
-
-#: Request headers worth keeping in evidence (lower-case).
-KEPT_REQUEST_HEADERS: frozenset[str] = frozenset(
-    {
-        "accept",
-        "content-type",
-        "origin",
-        "host",
-        "user-agent",
-        "authorization",
-        "mcp-session-id",
-        "mcp-protocol-version",
-        "mcp-method",
-        "mcp-name",
-        "last-event-id",
-    }
-)
-
 REDACTED = "<redacted>"
 
+#: Header names whose values are credentials (lower-case, exact).
+_SENSITIVE_EXACT: frozenset[str] = frozenset(
+    {"authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key", "api-key", "x-auth"}
+)
+_SENSITIVE_PARTS: tuple[str, ...] = ("token", "secret", "password", "api-key", "apikey", "credential")
 
-def _subset(headers: Mapping[str, str] | Iterable[tuple[str, str]], keep: frozenset[str]) -> dict[str, str]:
+
+def is_sensitive_header(name: str) -> bool:
+    """True for headers whose values must never appear in evidence."""
+    lk = name.lower()
+    return lk in _SENSITIVE_EXACT or any(part in lk for part in _SENSITIVE_PARTS)
+
+
+def redact_headers(headers: Mapping[str, str] | Iterable[tuple[str, str]]) -> dict[str, str]:
+    """Keep every header (names lower-cased); redact the values of credential-bearing ones.
+
+    ``Authorization`` keeps its scheme (``Bearer <redacted>``) so a reader can
+    still see which kind of credential was presented.
+    """
     items = headers.items() if isinstance(headers, Mapping) else headers
     out: dict[str, str] = {}
     for key, value in items:
         lk = key.lower()
-        if lk not in keep:
-            continue
-        if lk == "authorization":
+        if lk in {"authorization", "proxy-authorization"}:
             scheme = value.split(" ", 1)[0] if value else ""
             out[lk] = f"{scheme} {REDACTED}".strip()
+        elif is_sensitive_header(lk):
+            out[lk] = REDACTED
         else:
             out[lk] = value
     return out
@@ -114,8 +90,8 @@ class EvidenceLog:
             method=method,
             url=redact_url(url) if url else url,
             status=status,
-            request_headers=_subset(request_headers or {}, KEPT_REQUEST_HEADERS),
-            response_headers=_subset(response_headers or {}, KEPT_RESPONSE_HEADERS),
+            request_headers=redact_headers(request_headers or {}),
+            response_headers=redact_headers(response_headers or {}),
             request_body=req_text,
             response_body=resp_text,
             request_truncated=req_trunc,

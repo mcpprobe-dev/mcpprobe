@@ -22,7 +22,7 @@ from mcpprobe.transport.base import (
     Transport,
     TransportError,
 )
-from mcpprobe.transport.evidence import EvidenceLog
+from mcpprobe.transport.evidence import EvidenceLog, is_sensitive_header
 from mcpprobe.transport.ratelimit import RateLimiter
 
 ACCEPT_BOTH = "application/json, text/event-stream"
@@ -77,6 +77,7 @@ class HttpTransport(Transport):
         limiter: RateLimiter | None = None,
         verify: bool | str = True,
         user_agent: str = USER_AGENT,
+        httpx_transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         super().__init__(evidence=evidence, limiter=limiter)
         self.url = url
@@ -91,6 +92,7 @@ class HttpTransport(Transport):
             verify=verify,
             follow_redirects=False,
             headers={"User-Agent": user_agent},
+            transport=httpx_transport,
         )
 
     # ------------------------------------------------------------------ headers
@@ -116,6 +118,10 @@ class HttpTransport(Transport):
             headers["Mcp-Session-Id"] = self.session_id
         headers.update(self.extra_headers)
         return headers
+
+    def credential_header_names(self) -> list[str]:
+        """Operator-supplied headers that carry credentials (dropped for unauthenticated probes)."""
+        return [k for k in self.extra_headers if is_credential_header(k)]
 
     # ------------------------------------------------------------------ raw I/O
     async def raw_request(
@@ -335,6 +341,12 @@ class HttpTransport(Transport):
 
     async def close(self) -> None:
         await self._client.aclose()
+
+
+def is_credential_header(name: str) -> bool:
+    """Headers an operator would use to authenticate (Authorization, Cookie, API-key style)."""
+    lk = name.lower()
+    return is_sensitive_header(lk) or lk.endswith("-auth") or lk == "x-authorization"
 
 
 def _parse_jsonrpc(body: bytes, want_id: int | str | None) -> dict[str, Any] | None:

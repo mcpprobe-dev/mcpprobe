@@ -215,19 +215,38 @@ def test_meta03_classifier():
 async def test_meta03_annotation_contradictions(make_server):
     async with make_server(tools=POISONED_TOOLS) as srv:
         report = await run(srv.url, only=["META-03"])
-    f = {x.location: x for x in by_id(report, "META-03")}
-    run_cmd = f["tools[run_command].annotations"]
-    assert any("readOnlyHint=true" in p for p in [run_cmd.description])
-    assert "destructiveHint=false" in run_cmd.description
-    assert "tools[send_email].annotations" in f
-    surface = f["tools"]
-    assert surface.severity == Severity.LOW and "exec" in surface.details["by_class"]
+    by_title = {x.title: x for x in by_id(report, "META-03")}
+    contra = by_title["Tool annotations contradict the tool's apparent capability"]
+    assert set(contra.affected) == {"run_command", "send_email"}
+    assert "readOnlyHint=true" in contra.description and "destructiveHint=false" in contra.description
+    assert contra.confidence_reason
+    surface = by_title["High-impact tool capabilities exposed"]
+    assert surface.severity == Severity.LOW and "email" in surface.details["by_class"]
+    # run_command is an arbitrary shell: reported once, as such, not in the low summary.
+    rce = next(x for x in by_id(report, "META-03") if "run_command" in x.details.get("arbitrary", {}))
+    assert rce.severity == Severity.HIGH  # loopback target: high, not critical
+    assert "run_command" not in surface.affected
 
 
 async def test_meta03_truthful_annotations_clean(make_server):
     async with make_server() as srv:
         report = await run(srv.url, only=["META-03"])
-    assert [x for x in by_id(report, "META-03") if x.location != "tools"] == []
+    assert [x for x in by_id(report, "META-03") if x.title != "High-impact tool capabilities exposed"] == []
+
+
+async def test_meta03_shell_tool_high_when_authenticated(make_server):
+    tool = {
+        "name": "run_command",
+        "description": "Run a shell command on the host.",
+        "inputSchema": {"type": "object", "properties": {"cmd": {"type": "string"}}},
+    }
+    async with make_server(tools=[tool]) as srv:
+        report = await run(srv.url, only=["META-03"])
+    (f,) = by_id(report, "META-03")
+    assert f.severity == Severity.HIGH
+    assert "Remove run_command" in f.fix and "annotations" in f.fix.lower()
+    assert "not whether the implementation really executes" in f.description
+    assert '"cmd"' in f.proof
 
 
 # ----------------------------------------------------------------------------- META-04
@@ -247,15 +266,19 @@ async def test_meta04_schema_hygiene(make_server):
     ]
     async with make_server(tools=tools) as srv:
         report = await run(srv.url, only=["META-04"])
-    f = {x.location: x for x in by_id(report, "META-04")}
-    bad = f["tools[bad name!]"]
-    assert bad.severity == Severity.MEDIUM
-    assert "name violates [A-Za-z0-9_.-]{1,128}" in bad.details["problems"]
-    assert "inputSchema missing or not an object" in bad.details["problems"]
-    assert f["tools[run_command]"].details["risky_arguments"] == ["cmd"]
-    assert "expected 'object'" in f["tools[arr]"].description
-    assert f["tools"].title == "Duplicate tool names" and f["tools"].details["duplicates"] == ["dup"]
-    assert "tools[safe_read]" not in f
+    findings = by_id(report, "META-04")
+    hygiene = next(x for x in findings if x.title == "Tool schema hygiene problems")
+    assert hygiene.severity == Severity.MEDIUM
+    problems = hygiene.details["tools"]
+    assert "name violates [A-Za-z0-9_.-]{1,128}" in problems["bad name!"]["problems"]
+    assert "inputSchema missing or not an object" in problems["bad name!"]["problems"]
+    assert hygiene.details["risky_arguments"]["run_command"] == ["cmd"]
+    assert "expected 'object'" in hygiene.description
+    assert "safe_read" not in hygiene.affected
+    assert {"bad name!", "run_command", "arr"} <= set(hygiene.affected)
+    dup = next(x for x in findings if x.title == "Duplicate tool names")
+    assert dup.details["duplicates"] == ["dup"]
+    assert len(findings) == 2  # one per root cause
 
 
 # ----------------------------------------------------------------------------- META-05

@@ -20,6 +20,7 @@ from mcpprobe.checks.base import (
     Check,
     JudgeFn,
     JudgeVerdict,
+    NotApplicable,
     ScanContext,
     ScanOptions,
 )
@@ -93,6 +94,7 @@ __all__ = [
     "Check",
     "JudgeFn",
     "JudgeVerdict",
+    "NotApplicable",
     "ScanContext",
     "ScanOptions",
     "get_check",

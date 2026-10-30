@@ -14,6 +14,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import jwt
 
+from mcpprobe.checks import proof
 from mcpprobe.checks._util import (
     host_of,
     is_local_or_private,
@@ -22,12 +23,17 @@ from mcpprobe.checks._util import (
     try_json,
     well_known_urls,
 )
-from mcpprobe.checks.base import Check, ScanContext, evidence_of, evidence_summary
+from mcpprobe.checks.base import Check, NotApplicable, ScanContext, evidence_of, evidence_summary
 from mcpprobe.checks.capability import classify_tools
 from mcpprobe.models import Confidence, Finding, Severity, Standards
 from mcpprobe.policy import OptOutError, check_dns_opt_out
 from mcpprobe.transport import PROTOCOL_2025_11_25, PROTOCOL_2026_07_28, RpcResponse
 from mcpprobe.transport.base import CLIENT_INFO
+
+
+def protected_resource_metadata_url(target: str) -> str:
+    """The path-aware RFC 9728 URL a server should advertise for ``target``."""
+    return well_known_urls(target, "oauth-protected-resource")[0]
 
 
 class Auth01NoAuthentication(Check):
@@ -46,10 +52,11 @@ class Auth01NoAuthentication(Check):
     description = (
         "POSTs initialize (or server/discover) and tools/list with no Authorization header. "
         "If the server answers with a tool list, anyone who can reach the endpoint can drive "
-        "its tools. Missing authentication was the single most common issue in public MCP "
-        "server studies."
+        "its tools. When the operator supplies credentials with --header, one extra request is "
+        "sent with those credentials removed, so a protected server is not misreported. "
+        "Passes only when the endpoint answers 401/403 without credentials."
     )
-    evidence_type = "The unauthenticated tools/list request and the 200 response."
+    evidence_type = "The unauthenticated request (Authorization shown as not sent) and the response."
     false_positive_notes = (
         "Servers protected by a network boundary (VPN, mTLS at a proxy, IP allow-list) will "
         "still be flagged because the scanner only sees what the endpoint returns. Local "
@@ -58,36 +65,79 @@ class Auth01NoAuthentication(Check):
     )
     fix = (
         "Put the endpoint behind OAuth 2.1 as described in the MCP authorization spec: return "
-        "401 with WWW-Authenticate pointing at RFC 9728 protected-resource metadata, validate "
-        "token audience, and reject requests without a valid bearer token. For local servers, "
-        "bind to 127.0.0.1 and still require a token."
+        '401 with WWW-Authenticate: Bearer resource_metadata="<RFC 9728 metadata URL>", '
+        "validate each token's signature, issuer, expiry and audience, and reject requests "
+        "without a valid bearer token. Authentication does not make a dangerous tool safe."
     )
 
     async def run(self, ctx: ScanContext) -> list[Finding]:
         fp = ctx.fingerprint
         if fp.auth_required:
-            return []
-        if fp.flavour == "unknown" and not ctx.inventory.tools:
-            return []
-        if not ctx.inventory.tools and ctx.inventory.tools_error:
-            return []
-        classes = classify_tools(ctx.inventory.tools)
+            return []  # tested: the endpoint answered 401/403 without credentials
+        inv = ctx.inventory
+        if not inv.tools and inv.tools_error:
+            rec = inv.tools_evidence
+            if rec is not None and rec.status in (401, 403):
+                return []  # tested: tools/list itself is protected
+            raise NotApplicable(
+                "negotiation succeeded without credentials but tools/list failed "
+                f"({inv.tools_error}), so it could not be determined whether tools are reachable "
+                "without credentials."
+            )
+        classes = classify_tools(inv.tools)
         dangerous = sorted(n for n, c in classes.items() if c.dangerous)
-        local = is_local_or_private(host_of(ctx.target))
+        arbitrary = sorted(n for n, c in classes.items() if c.arbitrary)
+        local = not ctx.is_public
         if local:
             severity = Severity.HIGH if dangerous else Severity.MEDIUM
         else:
             severity = Severity.CRITICAL if dangerous else Severity.HIGH
         where = "a loopback/private address" if local else "a public address"
-        desc = (
-            f"The server at {where} answered {fp.flavour or 'MCP'} negotiation and tools/list "
-            f"without any credentials, exposing {len(ctx.inventory.tools)} tool(s)."
-        )
+        probe = ctx.shared.get("unauth_probe")
+        names = ctx.tool_names()
+        if fp.credentials_supplied and probe is not None:
+            desc = (
+                f"With the operator-supplied credentials removed, the server at {where} still "
+                f"answered {probe.method} with HTTP {probe.status}. The same endpoint lists "
+                f"{len(names)} tool(s), so the credentials are not required."
+            )
+            ev = evidence_of(probe)
+            result_lines = [
+                f"result: {'JSON-RPC result returned' if probe.result is not None else 'non-401 body'}"
+            ]
+        else:
+            desc = (
+                f"The server at {where} answered {fp.flavour or 'MCP'} negotiation and tools/list "
+                f"without any credentials, exposing {len(names)} tool(s)."
+            )
+            ev = [e for e in [inv.tools_evidence] if e]
+            result_lines = [f"result.tools ({len(names)}): {', '.join(names) or '(none)'}"]
         if dangerous:
             desc += f" Tools with dangerous capability classes: {', '.join(dangerous)}."
-        ev = [e for e in [ctx.inventory.tools_evidence] if e]
-        names = ctx.tool_names()
         shown = ", ".join(names[:8]) + (f" (+{len(names) - 8} more)" if len(names) > 8 else "")
+        prm = protected_resource_metadata_url(ctx.target)
+        fix = (
+            "Require an OAuth 2.1 bearer token on every request, as the MCP authorization spec "
+            "describes. Answer requests without a valid token with HTTP 401 and exactly this header:\n"
+            f'  WWW-Authenticate: Bearer resource_metadata="{prm}"\n'
+            "serve RFC 9728 metadata at that URL (AUTH-02), and validate each token's signature, "
+            "issuer, expiry and audience (RFC 8707: aud must be this server) before handling the request."
+        )
+        if ctx.environment.edge:
+            fix += (
+                " If a gateway authorizer rejects requests before your code runs, make sure its 401 "
+                "still carries that WWW-Authenticate header, or MCP clients cannot start the OAuth flow."
+            )
+        if arbitrary or dangerous:
+            risky = arbitrary or dangerous
+            them = "them" if len(risky) > 1 else "it"
+            fix += (
+                f" Authentication does not make {', '.join(risky)} safe: any authenticated client, "
+                f"or a prompt-injected model acting for one, can still call {them}. Remove or "
+                f"sandbox {them} first (META-03)."
+            )
+        if local:
+            fix += " For a local development server, also bind to 127.0.0.1 rather than 0.0.0.0."
         return [
             self.finding(
                 description=desc,
@@ -98,13 +148,29 @@ class Auth01NoAuthentication(Check):
                     ev, f"no Authorization header sent; {len(names)} tools listed: {shown}"
                 ),
                 location=ctx.target,
-                details={"tools": ctx.tool_names(), "dangerous_tools": dangerous, "local": local},
+                details={"tools": names, "dangerous_tools": dangerous, "local": local},
+                fix=fix,
+                affected=names,
+                proof=proof.exchange(
+                    ev[0] if ev else None,
+                    absent_request=["Authorization"],
+                    result_lines=[
+                        *result_lines,
+                        "www-authenticate: (absent; a protected server answers 401 with it)",
+                    ],
+                ),
+                verify=proof.curl_rpc(
+                    ctx.target,
+                    "initialize",
+                    proof.initialize_params(),
+                    expect=f'HTTP 401 with WWW-Authenticate: Bearer resource_metadata="{prm}"',
+                ),
             )
         ]
 
 
 class Auth02MissingProtectedResourceMetadata(Check):
-    """Auth-protected server without discoverable RFC 9728 metadata."""
+    """RFC 9728 metadata must be discoverable; missing metadata is this check's finding condition."""
 
     id = "AUTH-02"
     title = "Protected resource metadata (RFC 9728) missing or invalid"
@@ -112,15 +178,18 @@ class Auth02MissingProtectedResourceMetadata(Check):
     applies_to = frozenset({"http"})
     standards = Standards(mcp=["MCP07:2025"])
     description = (
-        "On a 401 the scanner parses WWW-Authenticate for resource_metadata, then tries "
+        "Parses WWW-Authenticate for resource_metadata (when the server answers 401), then tries "
         "/.well-known/oauth-protected-resource[/path] and the host root. The document must be "
         "JSON with a non-empty authorization_servers list. Without it, conformant clients cannot "
-        "start the OAuth flow and users are pushed toward pasting long-lived static tokens."
+        "start the OAuth flow and users are pushed toward pasting long-lived static tokens. A "
+        "server that requires no authentication and serves no metadata is reported too (medium, "
+        "the discovery half of AUTH-01)."
     )
-    evidence_type = "The 401 response headers and each metadata GET with its status/body."
+    evidence_type = "The 401 response headers and each metadata GET with its status."
     false_positive_notes = (
         "Servers that use a non-OAuth scheme (API keys at a gateway) will be flagged; the MCP "
-        "spec still expects RFC 9728 metadata for HTTP transports."
+        "spec still expects RFC 9728 metadata for HTTP transports. A deliberately public, "
+        "read-only server with no authentication will also be flagged; AUTH-01 is the root cause."
     )
     fix = (
         "Serve /.well-known/oauth-protected-resource (path-aware variant preferred) with "
@@ -131,8 +200,8 @@ class Auth02MissingProtectedResourceMetadata(Check):
     async def run(self, ctx: ScanContext) -> list[Finding]:
         fp = ctx.fingerprint
         http = ctx.http
-        if not fp.auth_required or http is None:
-            return []
+        if http is None:
+            raise NotApplicable("not an HTTP target.")
         findings: list[Finding] = []
         params = parse_www_authenticate(fp.www_authenticate)
         hint = params.get("resource_metadata")
@@ -158,21 +227,76 @@ class Auth02MissingProtectedResourceMetadata(Check):
                 if isinstance(doc, dict):
                     prm, prm_url = doc, url
                     break
-        if prm is None:
-            findings.append(
-                self.finding(
-                    description=(
-                        "The server requires authentication (401) but no RFC 9728 protected "
-                        "resource metadata document could be found via WWW-Authenticate or the "
-                        "well-known locations."
-                    ),
-                    severity=Severity.HIGH,
-                    confidence=Confidence.HIGH,
-                    evidence=evidence_of(*responses),
-                    location=ctx.target,
-                    details={"www_authenticate": fp.www_authenticate, "tried": candidates},
-                )
+        if not responses:
+            raise NotApplicable("no same-origin metadata URL could be requested.")
+        if all(r.status is None for r in responses):
+            raise RuntimeError(
+                "every metadata request failed at the transport level: "
+                + "; ".join(r.error_text or "no response" for r in responses)
             )
+        gets = [
+            f"GET {r.evidence.url if r.evidence else '?'} -> "
+            + (
+                f"HTTP {r.status} {r.headers.get('content-type', '').split(';')[0]}".rstrip()
+                if r.status
+                else str(r.error_text)
+            )
+            for r in responses
+        ]
+        suggested = protected_resource_metadata_url(ctx.target)
+        verify = f'curl -si {suggested}  # expect HTTP 200, JSON with "resource" and a non-empty "authorization_servers"'
+        if prm is None:
+            statuses = ", ".join(f"HTTP {r.status}" if r.status else "no response" for r in responses)
+            www = (
+                ["", f"WWW-Authenticate on the 401: {fp.www_authenticate or '(absent)'}"]
+                if fp.auth_required
+                else []
+            )
+            proof_text = "\n".join(["Metadata requests:", *(f"  {g}" for g in gets), *www])
+            if fp.auth_required:
+                findings.append(
+                    self.finding(
+                        description=(
+                            "The server requires authentication (401) but no RFC 9728 protected "
+                            "resource metadata document could be found via WWW-Authenticate or the "
+                            f"well-known locations ({statuses})."
+                        ),
+                        severity=Severity.HIGH,
+                        confidence=Confidence.HIGH,
+                        evidence=evidence_of(*responses),
+                        location=ctx.target,
+                        details={"www_authenticate": fp.www_authenticate, "tried": candidates},
+                        affected=[c for c in candidates if origin_of(c) == target_origin],
+                        proof=proof_text,
+                        verify=verify,
+                    )
+                )
+            else:
+                local = not ctx.is_public
+                findings.append(
+                    self.finding(
+                        description=(
+                            "No RFC 9728 protected resource metadata is served at either well-known "
+                            f"location ({statuses}), and the server requires no authentication. "
+                            "A client therefore has no way to discover how to authenticate; this is "
+                            "the discovery half of AUTH-01 and is fixed together with it."
+                        ),
+                        severity=Severity.LOW if local else Severity.MEDIUM,
+                        confidence=Confidence.HIGH,
+                        evidence=evidence_of(*responses),
+                        location=ctx.target,
+                        details={"tried": candidates, "auth_required": False},
+                        fix=(
+                            "When you add authentication (AUTH-01), serve RFC 9728 metadata at "
+                            f"{suggested} with 'resource' set to {ctx.target} and "
+                            "'authorization_servers' listing your OAuth issuer, and point to it from "
+                            f'every 401: WWW-Authenticate: Bearer resource_metadata="{suggested}".'
+                        ),
+                        affected=[c for c in candidates if origin_of(c) == target_origin],
+                        proof=proof_text,
+                        verify=verify,
+                    )
+                )
             return findings
         ctx.shared["prm"] = prm
         ctx.shared["prm_url"] = prm_url
@@ -184,6 +308,7 @@ class Auth02MissingProtectedResourceMetadata(Check):
             problems.append("authorization_servers contains non-URL entries")
         if "resource" not in prm:
             problems.append("'resource' field missing")
+        doc_proof = f"GET {prm_url} -> HTTP 200\n" + proof.indent(proof.pretty(prm))
         if problems:
             findings.append(
                 self.finding(
@@ -195,9 +320,12 @@ class Auth02MissingProtectedResourceMetadata(Check):
                     evidence=evidence_of(*responses),
                     location=prm_url,
                     details={"problems": problems},
+                    affected=[str(prm_url)],
+                    proof=doc_proof + "\nProblems:\n" + "\n".join(f"  - {p}" for p in problems),
+                    verify=verify,
                 )
             )
-        if not hint:
+        if fp.auth_required and not hint:
             findings.append(
                 self.finding(
                     title="401 response lacks resource_metadata hint in WWW-Authenticate",
@@ -208,9 +336,22 @@ class Auth02MissingProtectedResourceMetadata(Check):
                     ),
                     severity=Severity.LOW,
                     confidence=Confidence.MEDIUM,
+                    confidence_reason=(
+                        "Spec-conformant clients fall back to the well-known location, so the "
+                        "practical impact depends on the client."
+                    ),
                     evidence=evidence_of(*responses),
                     location=ctx.target,
                     details={"www_authenticate": fp.www_authenticate},
+                    fix=f'Send WWW-Authenticate: Bearer resource_metadata="{prm_url}" on every 401.',
+                    affected=["WWW-Authenticate"],
+                    proof=f"WWW-Authenticate on the 401: {fp.www_authenticate or '(absent)'}\n" + doc_proof,
+                    verify=proof.curl_rpc(
+                        ctx.target,
+                        "initialize",
+                        proof.initialize_params(),
+                        expect=f'HTTP 401 with WWW-Authenticate: Bearer resource_metadata="{prm_url}"',
+                    ),
                 )
             )
         return findings
@@ -246,11 +387,29 @@ class Auth03AuthorizationServerMetadata(Check):
     async def run(self, ctx: ScanContext) -> list[Finding]:
         http = ctx.http
         prm = ctx.shared.get("prm")
-        if http is None or not isinstance(prm, dict):
-            return []
+        if http is None:
+            raise NotApplicable("not an HTTP target.")
+        if not isinstance(prm, dict):
+            if not ctx.fingerprint.auth_required:
+                raise NotApplicable(
+                    "The server accepts requests without authentication (AUTH-01) and advertises no "
+                    "authorization server, so there is no authorization server metadata to assess.",
+                    related_to="AUTH-01",
+                )
+            raise NotApplicable(
+                "No authorization server could be discovered because the protected resource "
+                "metadata is missing (AUTH-02).",
+                related_to="AUTH-02",
+            )
         servers = [s for s in prm.get("authorization_servers") or [] if isinstance(s, str)]
+        if not servers:
+            raise NotApplicable(
+                "The protected resource metadata lists no authorization server (AUTH-02).",
+                related_to="AUTH-02",
+            )
         findings: list[Finding] = []
         target_host = host_of(ctx.target)
+        assessed = 0
         for issuer in servers[:3]:
             issuer_host = host_of(issuer)
             if issuer_host != target_host:
@@ -267,16 +426,20 @@ class Auth03AuthorizationServerMetadata(Check):
                         f"AUTH-03: {issuer_host} has opted out of mcpprobe; AS metadata not fetched"
                     )
                     continue
+            assessed += 1
             responses: list[RpcResponse] = []
             doc: dict[str, Any] | None = None
+            doc_url = ""
             for url in _as_metadata_urls(issuer):
                 resp = await http.get(url, note="AUTH-03 authorization server metadata")
                 responses.append(resp)
                 if resp.status == 200:
                     candidate = try_json(resp.body)
                     if isinstance(candidate, dict):
-                        doc = candidate
+                        doc, doc_url = candidate, url
                         break
+            meta_url = _as_metadata_urls(issuer)[0]
+            verify = f"curl -s {meta_url} | jq '.code_challenge_methods_supported'  # expect a list containing \"S256\""
             if doc is None:
                 findings.append(
                     self.finding(
@@ -286,9 +449,18 @@ class Auth03AuthorizationServerMetadata(Check):
                         confidence=Confidence.HIGH,
                         evidence=evidence_of(*responses),
                         location=issuer,
+                        affected=[issuer],
+                        proof="Metadata requests:\n"
+                        + "\n".join(
+                            f"  GET {r.evidence.url if r.evidence else '?'} -> "
+                            + (f"HTTP {r.status}" if r.status else str(r.error_text))
+                            for r in responses
+                        ),
+                        verify=verify,
                     )
                 )
                 continue
+            doc_proof = f"GET {doc_url} -> HTTP 200\n" + proof.indent(proof.pretty(doc))
             methods = doc.get("code_challenge_methods_supported")
             if not isinstance(methods, list) or "S256" not in methods:
                 findings.append(
@@ -303,6 +475,9 @@ class Auth03AuthorizationServerMetadata(Check):
                         evidence=evidence_of(*responses),
                         location=issuer,
                         details={"code_challenge_methods_supported": methods},
+                        affected=[issuer],
+                        proof=doc_proof,
+                        verify=verify,
                     )
                 )
             insecure = [
@@ -323,6 +498,9 @@ class Auth03AuthorizationServerMetadata(Check):
                         evidence=evidence_of(*responses),
                         location=issuer,
                         details={"insecure_endpoints": insecure},
+                        affected=insecure,
+                        proof=doc_proof,
+                        verify=f"curl -s {doc_url} | jq 'with_entries(select(.key|endswith(\"_endpoint\")))'  # expect only https:// URLs",
                     )
                 )
             if isinstance(doc.get("issuer"), str) and doc["issuer"].rstrip("/") != issuer.rstrip("/"):
@@ -332,10 +510,22 @@ class Auth03AuthorizationServerMetadata(Check):
                         description=f"Metadata issuer {doc['issuer']!r} differs from advertised {issuer!r}.",
                         severity=Severity.LOW,
                         confidence=Confidence.MEDIUM,
+                        confidence_reason=(
+                            "A trailing-slash or case difference can be harmless, but RFC 8414 requires "
+                            "an exact match and strict clients will refuse it."
+                        ),
                         evidence=evidence_of(*responses),
                         location=issuer,
+                        affected=[issuer],
+                        proof=doc_proof,
+                        verify=f"curl -s {doc_url} | jq -r .issuer  # expect exactly {issuer}",
                     )
                 )
+        if assessed == 0:
+            raise NotApplicable(
+                "Every advertised authorization server is on a third-party host that was not "
+                "contacted (--no-follow-as or the host opted out); see scan notes."
+            )
         return findings
 
 
@@ -381,10 +571,18 @@ class Auth04TokenAudienceAndPassthrough(Check):
     async def run(self, ctx: ScanContext) -> list[Finding]:
         http = ctx.http
         fp = ctx.fingerprint
-        if http is None or not fp.auth_required:
-            return []
+        if http is None:
+            raise NotApplicable("not an HTTP target.")
+        if not fp.auth_required:
+            raise NotApplicable(
+                "The server accepts requests with no token at all (AUTH-01), so there is no token "
+                "validation to test.",
+                related_to="AUTH-01",
+            )
         findings: list[Finding] = []
         method, params, version = _probe_request(ctx)
+        creds = http.credential_header_names()
+        statuses: list[int | None] = []
         now_claims = {
             "iss": "https://mcpprobe.invalid/scanner",
             "aud": "https://not-the-target.invalid",
@@ -402,8 +600,10 @@ class Auth04TokenAudienceAndPassthrough(Check):
                 protocol_version=version,
                 include_session=False,
                 headers_override={"Authorization": f"Bearer {token}"},
+                drop_headers=[c for c in creds if c.lower() != "authorization"],
                 note=f"AUTH-04 self-minted token ({label})",
             )
+            statuses.append(resp.status)
             if _accepted(resp):
                 header_accepted.append(resp)
                 findings.append(
@@ -415,21 +615,49 @@ class Auth04TokenAudienceAndPassthrough(Check):
                         ),
                         severity=Severity.CRITICAL,
                         confidence=Confidence.HIGH if resp.result is not None else Confidence.MEDIUM,
+                        confidence_reason=None
+                        if resp.result is not None
+                        else "The response was 2xx but carried no JSON-RPC result, so acceptance is inferred from the status only.",
                         evidence=evidence_of(resp),
                         location=ctx.target,
                         details={"probe": label, "claims": now_claims},
+                        affected=[label],
+                        proof=proof.exchange(
+                            resp.evidence,
+                            request_headers=["authorization", "content-type"],
+                            response_headers=["content-type", "www-authenticate"],
+                            result_lines=[
+                                f"token claims: {json.dumps(now_claims, sort_keys=True)}",
+                                "result: "
+                                + ("JSON-RPC result returned" if resp.result is not None else "non-401 body"),
+                            ],
+                        ),
+                        verify=proof.curl_rpc(
+                            ctx.target,
+                            method,
+                            params,
+                            protocol_version=version,
+                            headers={"Authorization": f"Bearer {alg_none}"},
+                            expect="HTTP 401 (a self-minted alg=none token must be rejected)",
+                        ),
                     )
                 )
         # Token in query string (spec: MUST NOT be accepted).
         qs_url = _with_query(ctx.target, "access_token", hs256)
+        qs_headers = {
+            k: v
+            for k, v in http.default_headers(method, protocol_version=version, include_session=False).items()
+            if k not in creds
+        }
         resp = await http.raw_request(
             "POST",
             body=_body_for(http, method, params, version),
-            headers=http.default_headers(method, protocol_version=version, include_session=False),
+            headers=qs_headers,
             url=qs_url,
             label=method,
             note="AUTH-04 token in query string",
         )
+        statuses.append(resp.status)
         if _accepted(resp) and not header_accepted:
             findings.append(
                 self.finding(
@@ -441,9 +669,28 @@ class Auth04TokenAudienceAndPassthrough(Check):
                     ),
                     severity=Severity.HIGH,
                     confidence=Confidence.MEDIUM,
+                    confidence_reason=(
+                        "The token was self-minted, so acceptance may mean the server ignores the "
+                        "query parameter entirely rather than reading a token from it."
+                    ),
                     evidence=evidence_of(resp),
                     location=ctx.target,
+                    affected=["access_token query parameter"],
+                    proof=proof.exchange(
+                        resp.evidence,
+                        request_headers=["content-type"],
+                        response_headers=["content-type"],
+                        absent_request=["Authorization"],
+                    ),
+                    verify=f"curl -si -X POST '{ctx.target}?access_token=x' -H 'content-type: application/json' "
+                    f'-d \'{{"jsonrpc":"2.0","id":1,"method":"ping"}}\'  # expect HTTP 401',
                 )
+            )
+        if not findings and not any(s in (401, 403) for s in statuses):
+            raise NotApplicable(
+                "The forged-token probes were answered with "
+                + ", ".join(f"HTTP {s}" if s else "no response" for s in statuses)
+                + " rather than 401/403, so token validation could not be observed."
             )
         return findings
 

@@ -13,9 +13,16 @@ from mcpprobe.transport import EvidenceLog
 def report_to_dict(report: ScanReport, evidence: EvidenceLog | None = None) -> dict[str, Any]:
     data: dict[str, Any] = report.model_dump(mode="json")
     worst = report.max_severity()
+    coverage = report.coverage()
     data["summary"] = {
         "counts": report.counts(),
         "max_severity": worst.value if worst is not None else None,
+        "target_kind": report.target_kind,
+        # "passed" = ran and found nothing; not_applicable never counts as passed.
+        "checks_passed": coverage["passed"],
+        "checks_with_findings": coverage["with_findings"],
+        "checks_not_applicable": coverage["not_applicable"],
+        "checks_applicable": coverage["passed"] + coverage["with_findings"],
         "checks_ran": sum(1 for c in report.checks if c.status.value == "ran"),
         "checks_skipped": sum(1 for c in report.checks if c.status.value == "skipped"),
         "checks_not_implemented": sum(1 for c in report.checks if c.status.value == "not_implemented"),

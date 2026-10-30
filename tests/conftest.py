@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 
 from tests.fake_server import FakeMcpServer, make_config
@@ -16,6 +17,26 @@ STDIO_SERVER = HERE / "fake_stdio_server.py"
 
 def stdio_command(*flags: str) -> list[str]:
     return [sys.executable, str(STDIO_SERVER), *flags]
+
+
+class RouteToFixture(httpx.AsyncBaseTransport):
+    """httpx transport that sends every request to a local fixture, keeping the Host header.
+
+    Lets a test scan ``https://demo.example/mcp`` (a public HTTPS target, as far as the
+    scanner can tell from the URL) while the bytes go to ``http://127.0.0.1:<port>``.
+    TLS is therefore not observed in these tests.
+    """
+
+    def __init__(self, port: int) -> None:
+        self.port = port
+        self._inner = httpx.AsyncHTTPTransport()
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        request.url = request.url.copy_with(scheme="http", host="127.0.0.1", port=self.port)
+        return await self._inner.handle_async_request(request)
+
+    async def aclose(self) -> None:
+        await self._inner.aclose()
 
 
 @pytest.fixture
@@ -59,6 +80,8 @@ async def run(
     url_or_cmd: str | list[str],
     *,
     stdio: bool = False,
+    route_port: int | None = None,
+    rate: float = 1000,
     only=None,
     skip=None,
     txt_lookup=None,
@@ -74,7 +97,7 @@ async def run(
     cfg = ScanConfig(
         target=url_or_cmd if isinstance(url_or_cmd, str) else " ".join(url_or_cmd),
         stdio=stdio,
-        rate=1000,
+        rate=rate,
         options=options,
         only=only,
         skip=skip,
@@ -84,8 +107,15 @@ async def run(
         headers=headers or {},
         _unsafe_allow_any_rate=True,
     )
-    report, _evidence = await run_scan(cfg)
+    if route_port is not None:
+        cfg._httpx_transport = RouteToFixture(route_port)
+    report, evidence = await run_scan(cfg)
+    LAST_EVIDENCE[:] = evidence.records
     return report
+
+
+#: Evidence records of the most recent ``run`` (for tests that write full JSON reports).
+LAST_EVIDENCE: list[Any] = []
 
 
 def by_id(report, check_id: str):

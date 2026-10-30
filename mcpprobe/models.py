@@ -13,7 +13,11 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 #: Maximum number of body bytes retained per request/response in evidence.
-EVIDENCE_BODY_LIMIT = 4096
+#: Proof excerpts are always built from parsed data, never from this copy.
+EVIDENCE_BODY_LIMIT = 64 * 1024
+
+#: Version of the JSON report schema (see docs/report-schema.md).
+REPORT_SCHEMA_VERSION = "0.2"
 
 
 class Severity(str, Enum):
@@ -100,8 +104,9 @@ class Standards(BaseModel):
 class EvidenceRecord(BaseModel):
     """One request/response pair observed by the transport.
 
-    Bodies are truncated to :data:`EVIDENCE_BODY_LIMIT` bytes; only a fixed
-    subset of headers is kept and ``Authorization`` values are redacted.
+    Bodies are truncated to :data:`EVIDENCE_BODY_LIMIT` bytes. Every header is
+    kept; values of credential-bearing headers (Authorization, Cookie,
+    Set-Cookie, anything named like a token, key or secret) are redacted.
     """
 
     id: str
@@ -142,6 +147,20 @@ class Finding(BaseModel):
     )
     details: dict[str, Any] = Field(default_factory=dict)
     false_positive_notes: str | None = None
+    confidence_reason: str | None = Field(
+        default=None, description="Why the confidence is what it is; always set when confidence is not high"
+    )
+    verify: str | None = Field(default=None, description="One runnable line that confirms the fix")
+    affected: list[str] = Field(
+        default_factory=list, description="Tools, headers or paths affected by this root cause"
+    )
+    proof: str = Field(
+        default="",
+        description="Multi-line excerpt that proves the finding, built from parsed data, never truncated mid-object",
+    )
+    evidence_ids: list[str] = Field(
+        default_factory=list, description="IDs of the supporting evidence records"
+    )
 
     @property
     def fingerprint(self) -> str:
@@ -156,6 +175,8 @@ class CheckStatus(str, Enum):
     SKIPPED = "skipped"
     NOT_IMPLEMENTED = "not_implemented"
     ERROR = "error"
+    #: Preconditions absent (nothing to test). Never counts as a pass.
+    NOT_APPLICABLE = "not_applicable"
 
 
 class CheckResult(BaseModel):
@@ -166,8 +187,16 @@ class CheckResult(BaseModel):
     mode: CheckMode
     status: CheckStatus
     reason: str | None = None
+    related_to: str | None = Field(
+        default=None, description="Check whose result makes this one not applicable, e.g. AUTH-01"
+    )
     findings: list[Finding] = Field(default_factory=list)
     duration_ms: float | None = None
+
+    @property
+    def passed(self) -> bool:
+        """True only when the check actually ran and found nothing."""
+        return self.status == CheckStatus.RAN and not self.findings
 
 
 class Fingerprint(BaseModel):
@@ -182,6 +211,10 @@ class Fingerprint(BaseModel):
     auth_required: bool = False
     www_authenticate: str | None = None
     session_id_seen: bool = False
+    credentials_supplied: bool = Field(
+        default=False,
+        description="The operator supplied credential headers; auth_required then reflects an unauthenticated probe",
+    )
     server_info: dict[str, Any] = Field(default_factory=dict)
     capabilities: dict[str, Any] = Field(default_factory=dict)
     instructions: str | None = None
@@ -225,11 +258,36 @@ class AttestationItem(BaseModel):
     status: str = "attestation-only"
 
 
+class Chain(BaseModel):
+    """Several findings that together form one attack path."""
+
+    id: str
+    title: str
+    severity: Severity
+    finding_ids: list[str] = Field(description="Check IDs of the constituent findings")
+    narrative: str
+
+
+class Environment(BaseModel):
+    """Where the target appears to run (derived from response headers and the host)."""
+
+    edge: str | None = Field(
+        default=None,
+        description="'aws-api-gateway' | 'aws-cloudfront' | 'cloudflare' | 'vercel' | None",
+    )
+    public: bool = False
+    signals: list[str] = Field(default_factory=list, description="Headers that identified the edge")
+
+
 class ScanReport(BaseModel):
     """Top-level report document."""
 
+    schema_version: str = REPORT_SCHEMA_VERSION
     scanner: str = "mcpprobe"
     version: str
+    target_kind: str = Field(
+        default="mcp", description="'mcp' | 'not_mcp' | 'unreachable'; checks only run against 'mcp'"
+    )
     target: str
     mode: CheckMode
     started_at: dt.datetime
@@ -239,6 +297,8 @@ class ScanReport(BaseModel):
     checks: list[CheckResult] = Field(default_factory=list)
     findings: list[Finding] = Field(default_factory=list)
     attestations: list[AttestationItem] = Field(default_factory=list)
+    chains: list[Chain] = Field(default_factory=list)
+    environment: Environment | None = None
     evidence_count: int = 0
     authorisation_record: str | None = Field(
         default=None, description="Path of the authorisation record JSON, if active mode"
@@ -250,6 +310,23 @@ class ScanReport(BaseModel):
         out = {s.value: 0 for s in _SEVERITY_ORDER}
         for f in self.findings:
             out[f.severity.value] += 1
+        return out
+
+    def coverage(self) -> dict[str, int]:
+        """Check outcomes. ``passed`` counts only checks that ran and found nothing."""
+        out = {
+            "passed": 0,
+            "with_findings": 0,
+            "not_applicable": 0,
+            "skipped": 0,
+            "not_implemented": 0,
+            "error": 0,
+        }
+        for c in self.checks:
+            if c.status == CheckStatus.RAN:
+                out["passed" if not c.findings else "with_findings"] += 1
+            else:
+                out[c.status.value] += 1
         return out
 
     def max_severity(self) -> Severity | None:
