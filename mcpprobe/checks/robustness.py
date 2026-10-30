@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import re
 from typing import Any
@@ -120,7 +121,8 @@ class Err01VerboseErrors(Check):
         if responses and all(r.status in (401, 403) for r in responses):
             raise NotApplicable(
                 "Every malformed request was rejected at authentication (HTTP 401/403), so the "
-                "server's error handling behind authentication could not be observed; re-run with credentials."
+                "server's error handling behind authentication could not be observed; re-run with credentials.",
+                blocked=True,
             )
         if responses and all(r.status is None and not r.body for r in responses):
             raise RuntimeError("every malformed request failed at the transport level")
@@ -216,6 +218,8 @@ class Dos01UnboundedConsumption(Check):
     id = "DOS-01"
     title = "No visible limits on request size, nesting or rate"
     severity = Severity.LOW
+    #: A 429 during the burst is the evidence this check looks for, not a reason to stop.
+    handles_rate_limit = True
     standards = Standards(asi=["ASI08"], llm_2025=["LLM10:2025"], llm_2026=["LLM06:2026"])
     description = (
         "Three bounded probes, never more: (1) one tools/list whose 'cursor' is a 1 MB string, "
@@ -299,17 +303,20 @@ class Dos01UnboundedConsumption(Check):
         # (3) bounded burst
         statuses: list[int | None] = []
         burst_responses: list[RpcResponse] = []
-        for i in range(BURST_REQUESTS):
-            resp = await t.rpc("tools/list", {}, note=f"DOS-01 burst {i + 1}/{BURST_REQUESTS}")
-            burst_responses.append(resp)
-            statuses.append(resp.status)
-            if resp.status == 429:
-                break
+        # A 429 during the burst is the signal this probe looks for, so it is not waited out.
+        with t.raw_429() if isinstance(t, HttpTransport) else contextlib.nullcontext():
+            for i in range(BURST_REQUESTS):
+                resp = await t.rpc("tools/list", {}, note=f"DOS-01 burst {i + 1}/{BURST_REQUESTS}")
+                burst_responses.append(resp)
+                statuses.append(resp.status)
+                if resp.status == 429:
+                    break
         all_probe_statuses = [big.status, deep.status, *statuses]
         if isinstance(t, HttpTransport) and all(s in (401, 403) for s in all_probe_statuses):
             raise NotApplicable(
                 "Every probe was rejected at authentication (HTTP 401/403), so limits behind "
-                "authentication could not be observed; re-run with credentials."
+                "authentication could not be observed; re-run with credentials.",
+                blocked=True,
             )
         if isinstance(t, HttpTransport):
             if 429 in statuses:

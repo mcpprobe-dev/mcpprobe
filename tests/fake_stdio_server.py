@@ -61,13 +61,21 @@ def main() -> None:
                 "jsonrpc": "2.0",
                 "id": msg_id,
                 "result": {
-                    "protocolVersions": ["2026-07-28"],
+                    "resultType": "complete",
+                    "supportedVersions": ["2026-07-28"],
                     "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "fake-stdio", "version": "0.0.1"},
+                    "_meta": {
+                        "io.modelcontextprotocol/serverInfo": {"name": "fake-stdio", "version": "0.0.1"}
+                    },
+                    "ttlMs": 60000,
+                    "cacheScope": "public",
                 },
             }
         elif method == "tools/list":
-            out = {"jsonrpc": "2.0", "id": msg_id, "result": {"tools": tools}}
+            result = {"tools": tools}
+            if stateless:
+                result.update({"resultType": "complete", "ttlMs": 60000, "cacheScope": "public"})
+            out = {"jsonrpc": "2.0", "id": msg_id, "result": result}
         elif method in {"prompts/list", "resources/list"}:
             key = method.split("/")[0]
             out = {"jsonrpc": "2.0", "id": msg_id, "result": {key: []}}

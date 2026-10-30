@@ -31,7 +31,16 @@ from mcpprobe.checks.metadata import (
     Meta05SecretsInMetadata,
 )
 from mcpprobe.checks.poisoning import Meta01ToolDescriptionPoisoning
+from mcpprobe.checks.protocol_2026 import (
+    Auth05IssuerIdentification,
+    Auth06DynamicClientRegistration,
+    Trans06ServerDiscover,
+    Trans07UnadvertisedVersionAccepted,
+    Trans08HeaderBodyMismatch,
+    Trans09CachingHints,
+)
 from mcpprobe.checks.robustness import Dos01UnboundedConsumption, Err01VerboseErrors
+from mcpprobe.checks.tool_surface import Meta06ToolAnnotationLint, Meta07ToxicFlow
 from mcpprobe.checks.transport_conformance import (
     Trans01OriginValidation,
     Trans02ProtocolVersionHandling,
@@ -45,16 +54,24 @@ PASSIVE_CHECKS: list[type[Check]] = [
     Auth02MissingProtectedResourceMetadata,
     Auth03AuthorizationServerMetadata,
     Auth04TokenAudienceAndPassthrough,
+    Auth05IssuerIdentification,
+    Auth06DynamicClientRegistration,
     Trans01OriginValidation,
     Trans02ProtocolVersionHandling,
     Trans03SessionIdQuality,
     Trans04DeprecatedTransport,
     Trans05TlsAndHeaders,
+    Trans06ServerDiscover,
+    Trans07UnadvertisedVersionAccepted,
+    Trans08HeaderBodyMismatch,
+    Trans09CachingHints,
     Meta01ToolDescriptionPoisoning,
     Meta02RugPullBaseline,
     Meta03DangerousCapabilitySurface,
     Meta04SchemaHygiene,
     Meta05SecretsInMetadata,
+    Meta06ToolAnnotationLint,
+    Meta07ToxicFlow,
     Err01VerboseErrors,
     Dos01UnboundedConsumption,
 ]

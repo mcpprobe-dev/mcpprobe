@@ -461,6 +461,10 @@ class Auth03AuthorizationServerMetadata(Check):
                 )
                 continue
             doc_proof = f"GET {doc_url} -> HTTP 200\n" + proof.indent(proof.pretty(doc))
+            # Shared with AUTH-05/AUTH-06, which read the same document and send nothing.
+            ctx.shared.setdefault("as_metadata", []).append(
+                {"issuer": issuer, "url": doc_url, "doc": doc, "evidence": responses[-1].evidence}
+            )
             methods = doc.get("code_challenge_methods_supported")
             if not isinstance(methods, list) or "S256" not in methods:
                 findings.append(
@@ -524,7 +528,8 @@ class Auth03AuthorizationServerMetadata(Check):
         if assessed == 0:
             raise NotApplicable(
                 "Every advertised authorization server is on a third-party host that was not "
-                "contacted (--no-follow-as or the host opted out); see scan notes."
+                "contacted (--no-follow-as or the host opted out); see scan notes.",
+                blocked=True,
             )
         return findings
 
@@ -690,7 +695,8 @@ class Auth04TokenAudienceAndPassthrough(Check):
             raise NotApplicable(
                 "The forged-token probes were answered with "
                 + ", ".join(f"HTTP {s}" if s else "no response" for s in statuses)
-                + " rather than 401/403, so token validation could not be observed."
+                + " rather than 401/403, so token validation could not be observed.",
+                blocked=True,
             )
         return findings
 

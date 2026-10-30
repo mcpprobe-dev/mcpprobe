@@ -45,16 +45,40 @@ which checks ran, which were skipped and why. `mcpprobe checks` lists every chec
 
 | Area | Checks | Examples |
 |---|---|---|
-| Authentication | AUTH-01..04 | endpoint answers without credentials; missing RFC 9728 protected-resource metadata; no PKCE S256; accepts a self-minted JWT with the wrong audience; token accepted in the query string |
-| Transport | TRANS-01..05 | `Origin` not validated (DNS rebinding); bogus `MCP-Protocol-Version` accepted; weak or forgeable `Mcp-Session-Id`; deprecated HTTP+SSE; plain HTTP, weak TLS, missing headers |
-| Tool metadata | META-01..05 | instructions aimed at the model ("always call this first", "do not tell the user"), requests to send conversation, system prompt or secrets out, cross-tool shadowing, credential paths, URLs, base64, HTML comments, zero-width/bidi/homoglyph Unicode; rug-pull diff against a stored SHA-256 baseline; advertised arbitrary command execution or file access (high, critical when unauthenticated) and annotations that contradict capability; schema hygiene; secrets in descriptions or stdio env |
+| Authentication | AUTH-01..06 | endpoint answers without credentials; missing RFC 9728 protected-resource metadata; no PKCE S256; accepts a self-minted JWT with the wrong audience; token accepted in the query string; 2026-07-28: authorization server does not advertise RFC 9207 `iss`, deprecated Dynamic Client Registration without Client ID Metadata Documents |
+| Transport | TRANS-01..09 | `Origin` not validated (DNS rebinding); bogus `MCP-Protocol-Version` accepted; weak or forgeable `Mcp-Session-Id`; deprecated HTTP+SSE still served; plain HTTP, weak TLS, missing headers; 2026-07-28: incomplete `server/discover` result, a version the server does not advertise accepted (downgrade), `Mcp-Method` header/body mismatch not rejected with -32020, missing or invalid `ttlMs`/`cacheScope` |
+| Tool metadata | META-01..07 | instructions aimed at the model ("always call this first", "do not tell the user"), requests to send conversation, system prompt or secrets out, cross-tool shadowing, credential paths, URLs, base64, HTML comments, zero-width/bidi/homoglyph Unicode; rug-pull diff against a stored SHA-256 baseline; advertised arbitrary command execution or file access (high, critical when unauthenticated); schema hygiene; secrets in descriptions or stdio env; tool annotations missing or contradicting the tool (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`, title); the "lethal trifecta" of private data, untrusted content and an outbound channel on one server |
 | Robustness | ERR-01, DOS-01 | stack traces and versions in errors; one oversized argument, one 64-deep nesting probe and 20 paced `tools/list` calls, never more |
 | Active (gated stubs) | INJ-01..05, SUPPLY-01/02, SANDBOX-01 | registered and reported as `not_implemented` in this release |
 | Governance | GOV-01..05 | listed as attestation-only: not assessable by a scan, never marked passed |
 
+24 passive checks (plus 8 gated active stubs and 5 attestation-only governance items);
+`mcpprobe checks` lists them.
+
 Protocol revisions: the scanner tries `server/discover` (2026-07-28) first, then
 `initialize` with 2025-11-25 and 2025-06-18, then the deprecated 2024-11-05 HTTP+SSE
-transport, and records which one answered.
+transport, and records which one answered. Checks for rules that only exist in
+2026-07-28 are reported not applicable, with the negotiated revision as the reason,
+on servers that speak an earlier one.
+
+## Directory readiness
+
+Every JSON report carries a `readiness` list that maps the scan onto the listing
+requirements of the Anthropic, OpenAI and HubSpot MCP directories (OAuth 2.0, complete
+and accurate tool annotations, no hidden instructions, no unresolved critical/high
+findings, low exfiltration and poisoning risk, HTTPS). Each item is `met`, `not_met` or
+`not_assessable`, cites its source and names the checks it rests on; it is derived only
+from checks that actually ran, and anything a scan cannot decide (such as proof of
+endpoint ownership) is `not_assessable` with the reason. See
+[docs/report-schema.md](docs/report-schema.md).
+
+## Rate limits on the target
+
+An HTTP 429 is honoured: the request is repeated after `Retry-After` (1 s if absent),
+within a total waiting budget for the whole scan (`--rate-limit-wait`, 30 s by default).
+When the budget is used up, the checks whose requests were throttled are reported
+not applicable instead of drawing conclusions from throttled responses. DOS-01's burst
+is the exception: a 429 there is the evidence it looks for.
 
 ## Passive vs active
 
@@ -176,6 +200,20 @@ description after approval is the classic rug pull) and update the file; use
 
 Server-supplied text is shown with control characters made visible and is never
 interpreted as terminal markup.
+
+## Optional classifier for META-01
+
+```console
+$ pip install 'mcpprobe-scanner[hf]'     # transformers, torch, safetensors
+$ mcpprobe https://your-server.example/mcp --judge hf:/path/to/local/model
+$ mcpprobe https://your-server.example/mcp --judge hf:<hub-model-id> --judge-download
+```
+
+Off by default. A local prompt-injection classifier gives META-01 a second opinion; it
+adds a medium-severity indicator when it flags a description. Only `.safetensors`
+weights are loaded, model code is never executed, and nothing is downloaded unless you
+pass `--judge-download`. Model licences differ; read [docs/judges.md](docs/judges.md)
+first. Detection numbers for the heuristics are in [docs/benchmark.md](docs/benchmark.md).
 
 ## Python API and LLM-judge hook
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import re
 from typing import Any
 
@@ -14,7 +13,6 @@ from mcpprobe.checks.capability import (
     ARBITRARY_FILE_READ,
     ARBITRARY_FILE_WRITE,
     DANGEROUS_CLASSES,
-    Classification,
     classify_tools,
 )
 from mcpprobe.checks.poisoning import collect_text_items
@@ -39,10 +37,13 @@ _CAPABILITY_LABEL = {
 def _tools_verify(ctx: ScanContext, jq: str, expect: str, check_id: str) -> str:
     if ctx.http is None:
         return proof.rescan(ctx.target, check_id, stdio=True)
+    modern = ctx.fingerprint.flavour == "stateless-2026"
     return proof.curl_rpc(
         ctx.target,
         "tools/list",
-        {},
+        proof.modern_params() if modern else {},
+        protocol_version="2026-07-28" if modern else "2025-11-25",
+        headers={"Mcp-Method": "tools/list"} if modern else None,
         include_headers=False,
         auth_placeholder=ctx.fingerprint.credentials_supplied,
         jq=jq,
@@ -58,7 +59,7 @@ def _require_tools(ctx: ScanContext) -> None:
 
 class Meta03DangerousCapabilitySurface(Check):
     id = "META-03"
-    title = "Dangerous tool capability exposed or annotations contradict it"
+    title = "Dangerous tool capability exposed"
     severity = Severity.HIGH
     standards = Standards(
         mcp=["MCP02:2025", "MCP05:2025"],
@@ -71,9 +72,9 @@ class Meta03DangerousCapabilitySurface(Check):
         "Tools that advertise arbitrary command execution, arbitrary file read or arbitrary file "
         "write (a shell/file capability selected by a free-form string argument with no enum, "
         "const or pattern) are rated high on their own and critical when the remote endpoint "
-        "needs no authentication. Declared annotations are cross-checked (a command tool marked "
-        "readOnlyHint:true is reported), and the remaining high-impact surface (network, e-mail, "
-        "credentials, payments) is summarised at low severity. Passive scanning sees the "
+        "needs no authentication. The remaining high-impact surface (network, e-mail, "
+        "credentials, payments) is summarised at low severity. Annotations that contradict the "
+        "capability are reported by META-06 (until 0.2 they were reported here). Passive scanning sees the "
         "advertised capability, not whether the implementation really executes: the rating is "
         "based on the name, description and schema, and no tool is called."
     )
@@ -87,8 +88,7 @@ class Meta03DangerousCapabilitySurface(Check):
     fix = (
         "For arbitrary command execution or file access: remove the tool, or sandbox it and "
         "replace the free-form argument with an allow-list (enum) of commands or files. "
-        "Annotations come after that. Make annotations truthful (destructiveHint:true for "
-        "anything that executes or deletes); they help a careful client warn the user but do "
+        "Annotations come after that (META-06); they help a careful client warn the user but do "
         "nothing about the risk."
     )
 
@@ -193,78 +193,7 @@ class Meta03DangerousCapabilitySurface(Check):
                 )
             )
 
-        # 2. Annotation contradictions (one finding listing every affected tool).
-        contradictions: dict[str, list[str]] = {}
-        for tool in ctx.inventory.tools:
-            name = str(tool.get("name", "?"))
-            cls: Classification = classes.get(name) or Classification(name=name)
-            ann = tool.get("annotations")
-            if not isinstance(ann, dict):
-                continue
-            problems: list[str] = []
-            looks = "command execution" if cls.arbitrary.get(ARBITRARY_EXEC) else cls.primary
-            if ann.get("readOnlyHint") is True and (cls.writes or ARBITRARY_EXEC in cls.arbitrary):
-                problems.append(f"readOnlyHint=true but tool looks like {looks}")
-            if ann.get("destructiveHint") is False and (
-                any(c in {"exec", "delete", "file_write", "database_write"} for c in cls.classes)
-                or ARBITRARY_EXEC in cls.arbitrary
-            ):
-                problems.append(f"destructiveHint=false but tool looks like {looks}")
-            if ann.get("openWorldHint") is False and "network" in cls.classes:
-                problems.append("openWorldHint=false but tool appears to make network requests")
-            if problems:
-                contradictions[name] = problems
-        if contradictions:
-            names = sorted(contradictions)
-            findings.append(
-                self.finding(
-                    title="Tool annotations contradict the tool's apparent capability",
-                    description="; ".join(f"Tool '{n}': " + "; ".join(contradictions[n]) for n in names)
-                    + ". Clients that trust annotations may skip the user's approval for these tools.",
-                    severity=Severity.MEDIUM,
-                    confidence=Confidence.MEDIUM,
-                    confidence_reason=(
-                        "The capability is inferred from keywords in the name, description and "
-                        "parameter names, which can misclassify a narrowly scoped tool."
-                    ),
-                    evidence=ev,
-                    excerpt=evidence_summary(
-                        ev, "; ".join(f"{n}: annotations={by_name[n].get('annotations')}" for n in names)
-                    ),
-                    location="tools[*].annotations",
-                    details={
-                        "tools": {
-                            n: {
-                                "problems": contradictions[n],
-                                "annotations": by_name[n].get("annotations"),
-                                "classes": classes[n].classes,
-                                "matched_terms": classes[n].matched_terms,
-                            }
-                            for n in names
-                        }
-                    },
-                    fix=(
-                        "Make annotations truthful: readOnlyHint only for tools with no side effects, "
-                        "destructiveHint:true for anything that deletes or executes, openWorldHint:true "
-                        "for tools that reach the network."
-                    ),
-                    affected=names,
-                    proof="\n\n".join(
-                        f"tools[{n}]:\n  description: {by_name[n].get('description', '')}\n"
-                        f"  annotations: {json.dumps(by_name[n].get('annotations'))}\n"
-                        + "\n".join(f"  - {p}" for p in contradictions[n])
-                        for n in names
-                    ),
-                    verify=_tools_verify(
-                        ctx,
-                        ".result.tools[] | {name, annotations}",
-                        "annotations that match each tool's behaviour",
-                        self.id,
-                    ),
-                )
-            )
-
-        # 3. Remaining high-impact surface (informational review prompt).
+        # 2. Remaining high-impact surface (informational review prompt).
         rest = {n: c.classes for n, c in classes.items() if c.dangerous and n not in arbitrary}
         by_class: dict[str, list[str]] = {}
         for n, cl in rest.items():

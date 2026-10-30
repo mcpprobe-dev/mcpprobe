@@ -4,6 +4,8 @@
   no metadata, stateless, a shell tool with a poisoned description).
 * ``hardened``: the observable passive behaviour of the reviewer's hardened reference
   server (401 + RFC 9728, Origin 403, version 400, security headers, bounded schemas).
+* ``trifecta``: a conformant 2026-07-28 server without authentication whose correctly
+  annotated tools combine private data, untrusted content and an outbound channel.
 * ``html``: an ordinary web site that does not speak MCP.
 
 Any change in any check's outcome against either fixture fails this suite, in
@@ -26,6 +28,9 @@ from tests.fake_server import HARDENED_TOKEN, FakeMcpServer, make_config
 
 DEMO_URL = "https://demo.example/mcp"
 HARDENED_URL = "https://hardened.example/mcp"
+TRIFECTA_URL = "https://trifecta.example/mcp"
+#: Checks for rules introduced by 2026-07-28 (not applicable to earlier revisions).
+CHECKS_2026 = ["AUTH-05", "AUTH-06", "TRANS-06", "TRANS-07", "TRANS-08", "TRANS-09"]
 ACTIVE = ["INJ-01", "INJ-02", "INJ-03", "INJ-04", "INJ-05"]
 STDIO_ONLY = ["SUPPLY-01", "SUPPLY-02", "SANDBOX-01"]
 
@@ -45,8 +50,12 @@ DEMO_EXPECTED: dict[str, tuple[str, Any]] = {
     "META-03": ("findings", ["critical"]),
     "META-04": ("findings", ["low"]),
     "META-05": ("passed", None),
+    "META-06": ("findings", ["low"]),  # no annotations on any tool
+    "META-07": ("findings", ["high"]),  # run_command plays all three roles, no auth
     "ERR-01": ("passed", None),
     "DOS-01": ("findings", ["info"]),
+    # The demo speaks 2025-11-25 through initialize: the 2026-07-28 rules do not apply.
+    **{c: ("na", None) for c in CHECKS_2026},
     **{c: ("skipped", None) for c in ACTIVE + STDIO_ONLY},
 }
 
@@ -66,8 +75,11 @@ HARDENED_EXPECTED: dict[str, tuple[str, Any]] = {
             "META-03",
             "META-04",
             "META-05",
+            "META-06",
+            "META-07",
             "ERR-01",
             "DOS-01",
+            *CHECKS_2026,
         ]
     },
     "TRANS-03": ("na", None),  # stateless: no Mcp-Session-Id is issued
@@ -78,7 +90,44 @@ HARDENED_EXPECTED: dict[str, tuple[str, Any]] = {
 # Without credentials only what is behind authentication becomes not applicable.
 HARDENED_NO_CREDS_EXPECTED: dict[str, tuple[str, Any]] = {
     **HARDENED_EXPECTED,
-    **{c: ("na", None) for c in ["META-01", "META-02", "META-03", "META-04", "META-05", "ERR-01", "DOS-01"]},
+    **{
+        c: ("na", None)
+        for c in [
+            "META-01",
+            "META-02",
+            "META-03",
+            "META-04",
+            "META-05",
+            "META-06",
+            "META-07",
+            "ERR-01",
+            "DOS-01",
+            # server/discover is answered 401, so the revision (and the 2026 rules) is unknown.
+            *CHECKS_2026,
+        ]
+    },
+}
+
+TRIFECTA_EXPECTED: dict[str, tuple[str, Any]] = {
+    "AUTH-01": ("findings", ["critical"]),
+    "AUTH-02": ("findings", ["medium"]),
+    **{c: ("na", "AUTH-01") for c in ["AUTH-03", "AUTH-04", "AUTH-05", "AUTH-06"]},
+    "TRANS-01": ("passed", None),
+    "TRANS-02": ("passed", None),
+    "TRANS-03": ("na", None),  # 2026-07-28 has no sessions
+    "TRANS-04": ("passed", None),
+    "TRANS-05": ("findings", ["low"]),  # no Strict-Transport-Security
+    **{c: ("passed", None) for c in ["TRANS-06", "TRANS-07", "TRANS-08", "TRANS-09"]},
+    "META-01": ("passed", None),
+    "META-02": ("na", None),
+    "META-03": ("findings", ["low"]),  # network + e-mail surface summary
+    "META-04": ("passed", None),
+    "META-05": ("passed", None),
+    "META-06": ("passed", None),  # annotations complete and truthful
+    "META-07": ("findings", ["high"]),  # the trifecta, unauthenticated
+    "ERR-01": ("passed", None),
+    "DOS-01": ("findings", ["info"]),
+    **{c: ("skipped", None) for c in ACTIVE + STDIO_ONLY},
 }
 
 
@@ -211,14 +260,14 @@ def test_demo_attack_chain(demo_report):
 
 def test_demo_reporters_never_count_not_applicable_as_passed(demo_report):
     data = report_to_dict(demo_report)
-    assert data["schema_version"] == "0.2" and data["target_kind"] == "mcp"
+    assert data["schema_version"] == "0.3" and data["target_kind"] == "mcp"
     s = data["summary"]
     assert s["checks_passed"] == 3  # TRANS-04, META-05, ERR-01
-    assert s["checks_not_applicable"] == 4
-    assert s["checks_with_findings"] == 9
+    assert s["checks_not_applicable"] == 4 + len(CHECKS_2026)
+    assert s["checks_with_findings"] == 11
     sarif = to_sarif(demo_report)["runs"][0]["properties"]
     assert set(sarif["passedChecks"]) == {"TRANS-04", "META-05", "ERR-01"}
-    assert {"AUTH-03", "AUTH-04", "TRANS-03", "META-02"} == set(sarif["notApplicableChecks"])
+    assert {"AUTH-03", "AUTH-04", "TRANS-03", "META-02", *CHECKS_2026} == set(sarif["notApplicableChecks"])
     assert status_of(demo_report, "AUTH-04").passed is False
 
 
@@ -298,3 +347,128 @@ def test_unreachable_target():
     report = asyncio.run(run(f"http://127.0.0.1:{port}/mcp", txt_lookup=no_txt))
     assert report.target_kind == "unreachable"
     assert all(c.status.value == "not_applicable" for c in report.checks)
+
+
+# ----------------------------------------------------------------------------- 0.3: new checks on the fixtures
+def _readiness(report: Any) -> dict[tuple[str, str], str]:
+    return {(r.directory, r.requirement.split(":")[0]): r.status.value for r in report.readiness}
+
+
+def test_demo_meta06_lists_every_unannotated_tool(demo_report):
+    [f] = by_id(demo_report, "META-06")
+    assert f.title == "Tool annotations missing" and f.severity == Severity.LOW
+    assert f.confidence == Confidence.HIGH and f.confidence_reason is None
+    assert f.affected == ["echo", "run_command", "read_file"]
+    assert f.details["missing"]["run_command"] == [
+        "readOnlyHint",
+        "destructiveHint",
+        "idempotentHint",
+        "openWorldHint",
+        "title",
+    ]
+    assert "annotations: (absent)" in f.proof
+    assert "support.claude.com" in f.fix and "developers.openai.com" in f.fix
+
+
+def test_demo_meta07_shell_is_the_whole_trifecta(demo_report):
+    [f] = by_id(demo_report, "META-07")
+    assert f.severity == Severity.HIGH and f.details["unauthenticated"] is True
+    roles = f.details["roles"]
+    assert set(roles["private_data"]) == {"read_file", "run_command"}
+    assert set(roles["untrusted_content"]) == {"run_command"}
+    assert set(roles["external_send"]) == {"run_command"}
+    assert "arbitrary command execution (see META-03)" in f.proof
+    assert "lethal trifecta" in f.description and f.confidence_reason
+
+
+def test_demo_2026_checks_name_the_negotiated_revision(demo_report):
+    for cid in CHECKS_2026:
+        st = status_of(demo_report, cid)
+        assert "2025-11-25" in (st.reason or "") and "2026-07-28" in (st.reason or "")
+        assert st.blocked is False
+
+
+def test_demo_readiness(demo_report):
+    assert _readiness(demo_report) == {
+        ("anthropic", "5D"): "not_met",
+        ("anthropic", "5E"): "not_met",
+        ("anthropic", "2G"): "not_met",
+        ("anthropic", "3F"): "not_assessable",
+        ("openai", "Accurate readOnlyHint, destructiveHint and openWorldHint on every tool"): "not_met",
+        ("hubspot", "No unresolved critical or high vulnerabilities at the time of review"): "not_met",
+        ("hubspot", "Low security risk for data exfiltration and tool poisoning"): "not_met",
+        ("hubspot", "mcpUrl uses HTTPS"): "met",
+    }
+    for item in demo_report.readiness:
+        assert item.source_url.startswith("https://") and item.note
+    no_high = next(r for r in demo_report.readiness if r.requirement.startswith("No unresolved"))
+    assert {"AUTH-01", "META-03", "META-01", "META-07"} <= set(no_high.check_ids)
+
+
+def test_hardened_readiness_is_met_except_ownership(hardened_report):
+    statuses = _readiness(hardened_report)
+    assert statuses.pop(("anthropic", "3F")) == "not_assessable"
+    assert set(statuses.values()) == {"met"}
+    assert hardened_report.fingerprint.flavour == "stateless-2026"
+    assert hardened_report.fingerprint.supported_versions == ["2026-07-28", "2025-11-25"]
+
+
+def test_hardened_without_credentials_readiness_is_not_assessable():
+    import asyncio
+
+    report, _ = asyncio.run(_scan("hardened", HARDENED_URL))
+    statuses = _readiness(report)
+    assert statuses[("anthropic", "5D")] == "met"  # 401 + RFC 9728 + RFC 8414, all observable
+    for key in [
+        ("anthropic", "5E"),
+        ("anthropic", "2G"),
+        ("hubspot", "No unresolved critical or high vulnerabilities at the time of review"),
+    ]:
+        assert statuses[key] == "not_assessable", key
+    for cid in [*CHECKS_2026, "META-06", "META-07"]:
+        assert status_of(report, cid).blocked is True, cid
+
+
+@pytest.fixture(scope="module")
+def trifecta_report():
+    import asyncio
+
+    report, srv = asyncio.run(_scan("trifecta", TRIFECTA_URL))
+    assert srv.tool_calls == []
+    return report
+
+
+def test_trifecta_every_check_outcome_is_pinned(trifecta_report):
+    assert _outcomes(trifecta_report) == TRIFECTA_EXPECTED
+    _assert_contract(trifecta_report)
+
+
+def test_trifecta_meta07(trifecta_report):
+    [f] = by_id(trifecta_report, "META-07")
+    assert f.details["roles"] == {
+        "private_data": {"query_customers": "accesses a database"},
+        "untrusted_content": {"fetch_url": "pulls content from the web ('fetch')"},
+        "external_send": {"send_email": "sends data out ('send')"},
+    }
+    assert f.affected == ["fetch_url", "query_customers", "send_email"]
+    assert "split the tools across separate servers" in f.fix and "confirmation" in f.fix
+    assert "Authentication: none required (AUTH-01)" in f.proof
+
+
+def test_trifecta_readiness(trifecta_report):
+    statuses = _readiness(trifecta_report)
+    assert statuses[("anthropic", "5E")] == "met"
+    assert statuses[("anthropic", "2G")] == "met"
+    assert statuses[("hubspot", "Low security risk for data exfiltration and tool poisoning")] == "not_met"
+    assert statuses[("anthropic", "5D")] == "not_met"
+
+
+def test_html_site_readiness_is_not_assessable():
+    import asyncio
+
+    srv = FakeMcpServer(make_config("html")).start()
+    try:
+        report = asyncio.run(run(srv.base + "/", txt_lookup=no_txt))
+    finally:
+        srv.stop()
+    assert report.readiness and all(r.status.value == "not_assessable" for r in report.readiness)

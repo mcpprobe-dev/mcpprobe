@@ -25,6 +25,7 @@ from mcpprobe.models import (
     utcnow,
 )
 from mcpprobe.policy import DEFAULT_RATE, check_opt_out, clamp_rate
+from mcpprobe.readiness import build_readiness
 from mcpprobe.transport import (
     PROTOCOL_2025_11_25,
     PROTOCOL_2026_07_28,
@@ -38,7 +39,7 @@ from mcpprobe.transport import (
     ensure_url,
     fingerprint,
 )
-from mcpprobe.transport.base import CLIENT_INFO
+from mcpprobe.transport.base import CLIENT_INFO, DEFAULT_THROTTLE_BUDGET
 
 MAX_LIST_PAGES = 10
 
@@ -61,6 +62,9 @@ class ScanConfig:
     verify_tls: bool | str = True
     #: DNS TXT resolver for the opt-out check (injected in tests).
     txt_lookup: TxtLookup | None = None
+    #: Total seconds the scan may spend waiting on HTTP 429 / Retry-After before
+    #: affected checks are reported not applicable.
+    max_rate_limit_wait: float = DEFAULT_THROTTLE_BUDGET
     #: Test-suite escape hatch for the 10 req/s ceiling. Not exposed on the CLI.
     _unsafe_allow_any_rate: bool = False
     #: Test-suite hook: an httpx transport that routes requests (e.g. to a local fixture).
@@ -73,6 +77,12 @@ class ScanConfig:
 
 
 def build_transport(config: ScanConfig, evidence: EvidenceLog, limiter: RateLimiter) -> Transport:
+    transport = _new_transport(config, evidence, limiter)
+    transport.throttle_budget = max(0.0, float(config.max_rate_limit_wait))
+    return transport
+
+
+def _new_transport(config: ScanConfig, evidence: EvidenceLog, limiter: RateLimiter) -> Transport:
     if config.stdio:
         return StdioTransport(
             config.target,
@@ -94,9 +104,13 @@ def build_transport(config: ScanConfig, evidence: EvidenceLog, limiter: RateLimi
 
 
 async def _list_all(
-    transport: Transport, method: str, key: str
+    transport: Transport, method: str, key: str, fields: dict[str, dict[str, Any]] | None = None
 ) -> tuple[list[dict[str, Any]], str | None, Any]:
-    """Paginate a ``*/list`` method; returns (items, error, first evidence)."""
+    """Paginate a ``*/list`` method; returns (items, error, first evidence).
+
+    The first page's other result fields (``ttlMs``, ``cacheScope``, ``resultType``...)
+    are stored in ``fields[method]`` when ``fields`` is given.
+    """
     items: list[dict[str, Any]] = []
     cursor: str | None = None
     first_evidence = None
@@ -110,6 +124,8 @@ async def _list_all(
             text = err.get("message") if err else (resp.error_text or f"HTTP {resp.status}")
             return items, str(text), first_evidence
         result = resp.result or {}
+        if fields is not None and method not in fields:
+            fields[method] = {k: v for k, v in result.items() if k != key}
         page = result.get(key)
         if isinstance(page, list):
             items.extend(x for x in page if isinstance(x, dict))
@@ -124,16 +140,17 @@ async def collect_inventory(transport: Transport, fp: Fingerprint) -> Inventory:
     if (fp.auth_required and not fp.credentials_supplied) or fp.flavour in {"unknown", "legacy-sse"}:
         inv.tools_error = "not listed: " + ("authentication required" if fp.auth_required else fp.flavour)
         return inv
-    inv.tools, inv.tools_error, inv.tools_evidence = await _list_all(transport, "tools/list", "tools")
+    fields = inv.result_fields
+    inv.tools, inv.tools_error, inv.tools_evidence = await _list_all(transport, "tools/list", "tools", fields)
     caps = fp.capabilities if isinstance(fp.capabilities, dict) else {}
     # Only ask for prompts/resources when advertised (or capabilities unknown) to avoid noise.
     if not caps or "prompts" in caps:
         inv.prompts, inv.prompts_error, inv.prompts_evidence = await _list_all(
-            transport, "prompts/list", "prompts"
+            transport, "prompts/list", "prompts", fields
         )
     if not caps or "resources" in caps:
         inv.resources, inv.resources_error, inv.resources_evidence = await _list_all(
-            transport, "resources/list", "resources"
+            transport, "resources/list", "resources", fields
         )
     return inv
 
@@ -205,6 +222,11 @@ def classify_non_mcp(fp: Fingerprint, records: list[EvidenceRecord], transport: 
             observed.append(f"{label} -> no JSON-RPC result")
     if not any_response:
         return "unreachable", "; ".join(dict.fromkeys(observed)) or (fp.error or "no response")
+    if any(by_id.get(str(a.get("evidence"))) and a.get("status") == 429 for a in fp.attempts):
+        # Throttled before it could say what it is: not evidence that it is not MCP.
+        return "unreachable", "rate limited (HTTP 429) during negotiation: " + "; ".join(
+            dict.fromkeys(observed)
+        )
     return "not_mcp", "; ".join(dict.fromkeys(observed))
 
 
@@ -223,12 +245,14 @@ async def run_check(check: Check, ctx: ScanContext) -> CheckResult:
             result.reason = "requires --active and verified ownership"
             return result
     started = time.monotonic()
+    throttled_before = ctx.transport.throttle_exhausted
     try:
         result.findings = await check.run(ctx)
     except NotApplicable as exc:
         result.status = CheckStatus.NOT_APPLICABLE
         result.reason = exc.reason
         result.related_to = exc.related_to
+        result.blocked = exc.blocked
     except NotImplementedError as exc:
         result.status = CheckStatus.NOT_IMPLEMENTED
         result.reason = str(exc)
@@ -238,6 +262,32 @@ async def run_check(check: Check, ctx: ScanContext) -> CheckResult:
     except Exception as exc:
         result.status = CheckStatus.ERROR
         result.reason = f"{type(exc).__name__}: {exc}"
+    throttled = ctx.transport.throttle_exhausted - throttled_before
+    if (
+        throttled
+        and not check.handles_rate_limit
+        and result.status
+        in (
+            CheckStatus.RAN,
+            CheckStatus.ERROR,
+            CheckStatus.NOT_APPLICABLE,
+        )
+    ):
+        dropped = len(result.findings)
+        if dropped:
+            ctx.notes.append(
+                f"{check.id}: {dropped} finding(s) withheld because the check's responses were rate limited."
+            )
+        result.findings = []
+        result.status = CheckStatus.NOT_APPLICABLE
+        result.related_to = None
+        result.blocked = True
+        result.reason = (
+            f"The server answered HTTP 429 (rate limited) {throttled} time(s) during this check and "
+            f"the scanner's waiting budget ({ctx.transport.throttle_budget:g} s in total, honouring "
+            "Retry-After) was used up, so the result would rest on throttled responses; re-run later "
+            "or with a lower --rate."
+        )
     result.duration_ms = (time.monotonic() - started) * 1000
     return result
 
@@ -293,6 +343,7 @@ async def run_scan(config: ScanConfig) -> tuple[ScanReport, EvidenceLog]:
                         reason=reason,
                     )
                 )
+            report.readiness = build_readiness(report)
             report.finished_at = utcnow()
             report.evidence_count = len(evidence)
             return report, evidence
@@ -322,6 +373,7 @@ async def run_scan(config: ScanConfig) -> tuple[ScanReport, EvidenceLog]:
             report.findings.extend(result.findings)
         report.notes.extend(ctx.notes)
         report.chains = build_chains(report, ctx)
+        report.readiness = build_readiness(report)
     report.finished_at = utcnow()
     report.evidence_count = len(evidence)
     report.findings.sort(key=lambda f: (-f.severity.rank, f.id, f.location or ""))

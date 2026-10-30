@@ -92,7 +92,8 @@ class Trans01OriginValidation(Check):
                     raise NotApplicable(
                         "The server answered "
                         + " and ".join(b.split(" -> ")[1] for b in blocked)
-                        + " before Origin validation could be observed; re-run with credentials."
+                        + " before Origin validation could be observed; re-run with credentials.",
+                        blocked=True,
                     )
             return []
         local = not ctx.is_public
@@ -206,7 +207,8 @@ class Trans02ProtocolVersionHandling(Check):
         if resp.status in (401, 403, 429):
             raise NotApplicable(
                 f"The server answered HTTP {resp.status} before the version header could be "
-                "evaluated; re-run with credentials."
+                "evaluated; re-run with credentials.",
+                blocked=True,
             )
         echoed = None
         if isinstance(resp.result, dict) and resp.result.get("protocolVersion") == BOGUS_VERSION:
@@ -434,7 +436,8 @@ class Trans04DeprecatedTransport(Check):
         if resp.status in (401, 403, 429) and fp.protocol_version is None:
             raise NotApplicable(
                 f"The GET probe for the legacy transport was answered with HTTP {resp.status}, so it "
-                "could not be determined whether the deprecated HTTP+SSE transport is served."
+                "could not be determined whether the deprecated HTTP+SSE transport is served.",
+                blocked=True,
             )
         if resp.status == 200 and "text/event-stream" in resp.headers.get("content-type", ""):
             if _first_event_name(resp.body) == "endpoint":

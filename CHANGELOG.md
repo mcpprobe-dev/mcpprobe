@@ -6,6 +6,82 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0]
+
+Directory readiness, the 2026-07-28 protocol rules, tool annotations and toxic flows.
+Report schema 0.3 (additions only). 24 passive checks, up from 16.
+
+### Added
+
+- **META-06 Tool annotation lint.** Missing `readOnlyHint`, `openWorldHint` and title on
+  every tool, `destructiveHint`/`idempotentHint` on every tool not marked read-only (the
+  spec says they only mean something then), non-boolean hints, and annotations that
+  contradict the tool's apparent capability (read-only or non-destructive on something
+  that executes, writes, deletes, sends or pays; closed-world on a network tool). Medium
+  when a dangerous-class tool is mislabelled, low when annotations are only missing;
+  one finding lists every tool. Fix text cites Anthropic's directory policy (5E) and
+  OpenAI's app review.
+- **META-07 Toxic flow (lethal trifecta).** Warns when one server offers access to
+  private data, intake of untrusted content and a way to send data out, listing the
+  tools in each role. Medium; high when the endpoint needs no authentication. A tool
+  advertising arbitrary command execution counts for all three roles.
+- **2026-07-28 checks**, each verified against the specification text on
+  modelcontextprotocol.io and not applicable (with the negotiated revision as the
+  reason) on servers that speak an earlier revision:
+  - TRANS-06 `server/discover` result: `supportedVersions` including 2026-07-28,
+    `capabilities`, `resultType: "complete"`; missing `serverInfo` is informational.
+  - TRANS-07 a protocol version the server does not list in `supportedVersions` is
+    served instead of rejected with HTTP 400 / `UnsupportedProtocolVersionError`
+    (-32022): downgrade acceptance. One request.
+  - TRANS-08 `Mcp-Method` header that differs from the body, or is missing, is not
+    rejected with HTTP 400 / `HeaderMismatch` (-32020). Two requests. `Mcp-Name` is
+    not tested passively (it exists only for `tools/call`, `resources/read`,
+    `prompts/get`).
+  - TRANS-09 `ttlMs` (number >= 0) and `cacheScope` (`public`/`private`) missing or
+    invalid on `server/discover` and list results. Sends nothing.
+  - AUTH-05 authorization server metadata does not advertise
+    `authorization_response_iss_parameter_supported: true` (RFC 9207). Sends nothing.
+  - AUTH-06 deprecated Dynamic Client Registration offered without Client ID Metadata
+    Documents (low), or alongside them (informational). Sends nothing.
+  - "Deprecated HTTP+SSE still reachable" stays TRANS-04 (no new ID).
+- **Directory readiness** (`readiness` in the JSON report): Anthropic 5D/5E/2G/3F,
+  OpenAI annotations, HubSpot no-critical/high, exfiltration/poisoning risk and HTTPS,
+  each `met` / `not_met` / `not_assessable` with source URL, check IDs and a note.
+  Derived only from checks that ran; ownership (3F) is always not assessable from the CLI.
+- **Rate-limit handling.** HTTP 429 is honoured with `Retry-After` (1 s when absent), at
+  most 3 retries per request, within a scan-wide waiting budget (`--rate-limit-wait`,
+  default 30 s). When the budget is used up, the checks that met the throttled
+  responses are reported `not_applicable` (blocked) and their findings withheld,
+  instead of drawing conclusions from throttled responses. DOS-01's burst still
+  observes 429 directly. A target that rate-limits negotiation is reported
+  `unreachable`, not "not an MCP server".
+- **Optional Hugging Face judge for META-01** (`--judge hf:<model-id-or-path>`,
+  `--judge-download`, `--judge-threshold`; extra `mcpprobe-scanner[hf]`). Off by
+  default, safetensors only, no remote code, no download unless asked. Licence notes in
+  docs/judges.md.
+- `scripts/benchmark_judge.py` and docs/benchmark.md: precision, recall and false-positive
+  rate of META-01 on the in-sample corpus and on a new held-out set (65% recall at medium
+  or above, 0 false positives on 40 benign descriptions). The Hugging Face Hub was not
+  reachable when the numbers were produced, so no public dataset or classifier was scored.
+- Report schema 0.3: `checks[].blocked`, `fingerprint.supported_versions`, `readiness`.
+- Fixture `trifecta` (a conformant 2026-07-28 server whose tools form the trifecta); all
+  its check outcomes are pinned in CI.
+
+### Changed
+
+- Annotation contradictions moved from META-03 to META-06 (reported once). META-03 is
+  now titled "Dangerous tool capability exposed". E-mail and payment tools count as
+  writes only when a mutating verb (send, charge, refund, ...) is present, so a
+  read-only `list_emails` marked `readOnlyHint: true` is no longer a contradiction.
+- 2026-07-28 requests now carry the required `io.modelcontextprotocol/clientCapabilities`
+  and the recommended `clientInfo` in `_meta`.
+- The fingerprint reads `supportedVersions` and `_meta["io.modelcontextprotocol/serverInfo"]`
+  from `server/discover` as the 2026-07-28 schema defines them (the pre-release keys are
+  no longer merged into `server_info`).
+- The `hardened` fixture is now dual-era (2026-07-28 and 2025-11-25) with
+  spec-conformant `server/discover`, header validation, caching hints, RFC 9207 and
+  CIMD metadata; it still produces zero findings.
+
 ## [0.2.0]
 
 Accuracy release, driven by an independent review of a 0.1.0 scan of the project's own

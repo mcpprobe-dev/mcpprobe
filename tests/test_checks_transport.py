@@ -55,7 +55,11 @@ async def test_trans02_bogus_version_rejected(make_server):
 
 
 async def test_trans02_stateless_server(make_server):
-    async with make_server(stateless_2026=True, session_mode="none", version_check=False) as srv:
+    # A server that ignores the version header entirely (and so also skips the 2026-07-28
+    # header/body validation, which would otherwise reject the mismatching header).
+    async with make_server(
+        stateless_2026=True, session_mode="none", version_check=False, validate_mcp_headers=False
+    ) as srv:
         report = await run(srv.url, only=["TRANS-02"])
     assert report.fingerprint.flavour == "stateless-2026"
     assert len(by_id(report, "TRANS-02")) == 1

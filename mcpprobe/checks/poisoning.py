@@ -595,10 +595,13 @@ def _verify(ctx: ScanContext, item: TextItem) -> str:
         return proof.rescan(ctx.target, "META-01", stdio=True)
     if item.kind in {"tool", "tool_param"}:
         jq = f'.result.tools[] | select(.name=="{item.owner}") | {{description, inputSchema}}'
+        modern = ctx.fingerprint.flavour == "stateless-2026"
         return proof.curl_rpc(
             ctx.target,
             "tools/list",
-            {},
+            proof.modern_params() if modern else {},
+            protocol_version="2026-07-28" if modern else "2025-11-25",
+            headers={"Mcp-Method": "tools/list"} if modern else None,
             include_headers=False,
             auth_placeholder=ctx.fingerprint.credentials_supplied,
             jq=jq,

@@ -8,9 +8,12 @@ Every exchange is written to the evidence log.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import datetime as dt
+import email.utils
 import json
 import time
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from typing import Any
 
 import httpx
@@ -28,6 +31,27 @@ from mcpprobe.transport.ratelimit import RateLimiter
 ACCEPT_BOTH = "application/json, text/event-stream"
 #: Hard cap on how many SSE bytes we buffer for one response.
 SSE_MAX_BYTES = 1_000_000
+#: How often one request is repeated after HTTP 429 before giving up.
+MAX_THROTTLE_RETRIES = 3
+#: Wait used when a 429 carries no (or an unparseable) Retry-After header.
+DEFAULT_RETRY_AFTER = 1.0
+
+
+def retry_after_seconds(value: str | None, now: dt.datetime | None = None) -> float:
+    """Seconds to wait for a ``Retry-After`` value (delta-seconds or HTTP-date, RFC 9110 10.2.3)."""
+    if not value:
+        return DEFAULT_RETRY_AFTER
+    value = value.strip()
+    if value.isdigit():
+        return float(int(value))
+    try:
+        when = email.utils.parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return DEFAULT_RETRY_AFTER
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=dt.UTC)
+    delta = (when - (now or dt.datetime.now(dt.UTC))).total_seconds()
+    return max(0.0, delta)
 
 
 class SseEvent:
@@ -86,6 +110,8 @@ class HttpTransport(Transport):
         self.user_agent = user_agent
         self.session_id: str | None = None
         self.tls_version: str | None = None
+        #: When False a 429 is handed back without waiting (see :meth:`raw_429`).
+        self.throttle_retry = True
         self.sessions_seen: list[str] = []
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(timeout),
@@ -141,7 +167,79 @@ class HttpTransport(Transport):
 
         If the response is an SSE stream it is read until a JSON-RPC message
         with id ``want_id`` is seen (or the stream ends / times out).
+
+        An HTTP 429 is honoured: the request is repeated after ``Retry-After``
+        (1 s when absent), at most :data:`MAX_THROTTLE_RETRIES` times, and only
+        while the scan-wide waiting budget (``throttle_budget`` seconds) lasts.
+        When the budget would be exceeded the 429 is returned as is and counted
+        in ``throttle_exhausted``, so the orchestrator can mark the check not
+        applicable instead of drawing conclusions from a throttled response.
+        Every attempt, including each 429, is recorded as evidence.
         """
+        resp = await self._send_once(
+            http_method,
+            body=body,
+            headers=headers,
+            url=url,
+            label=label,
+            want_id=want_id,
+            note=note,
+            track_session=track_session,
+            stream_timeout=stream_timeout,
+        )
+        if not self.throttle_retry:
+            return resp
+        retries = 0
+        while resp.status == 429:
+            wait = retry_after_seconds(resp.headers.get("retry-after"))
+            remaining = self.throttle_budget - self.throttle_waited
+            if retries >= MAX_THROTTLE_RETRIES or wait > remaining:
+                self.throttle_exhausted += 1
+                if resp.evidence is not None:
+                    resp.evidence.note = (
+                        f"{resp.evidence.note or label}; HTTP 429 not retried (Retry-After {wait:g}s, "
+                        f"{self.throttle_waited:g}s of the {self.throttle_budget:g}s waiting budget used)"
+                    )
+                return resp
+            retries += 1
+            self.throttle_waited += wait
+            await asyncio.sleep(wait)
+            resp = await self._send_once(
+                http_method,
+                body=body,
+                headers=headers,
+                url=url,
+                label=label,
+                want_id=want_id,
+                note=f"{note or label} (retry {retries} after HTTP 429, waited {wait:g}s)",
+                track_session=track_session,
+                stream_timeout=stream_timeout,
+            )
+        return resp
+
+    @contextlib.contextmanager
+    def raw_429(self) -> Iterator[None]:
+        """Within this block a 429 is returned immediately (DOS-01 wants to observe it)."""
+        previous = self.throttle_retry
+        self.throttle_retry = False
+        try:
+            yield
+        finally:
+            self.throttle_retry = previous
+
+    async def _send_once(
+        self,
+        http_method: str,
+        *,
+        body: bytes | str | None,
+        headers: Mapping[str, str] | None,
+        url: str | None,
+        label: str,
+        want_id: int | str | None,
+        note: str | None,
+        track_session: bool,
+        stream_timeout: float | None,
+    ) -> RpcResponse:
         await self.limiter.acquire()
         target = url or self.url
         hdrs = dict(headers or {})

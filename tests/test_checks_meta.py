@@ -213,13 +213,16 @@ def test_meta03_classifier():
 
 
 async def test_meta03_annotation_contradictions(make_server):
+    """Since 0.3 annotation contradictions are META-06's finding, reported once, not by META-03."""
     async with make_server(tools=POISONED_TOOLS) as srv:
-        report = await run(srv.url, only=["META-03"])
+        report = await run(srv.url, only=["META-03", "META-06"])
     by_title = {x.title: x for x in by_id(report, "META-03")}
-    contra = by_title["Tool annotations contradict the tool's apparent capability"]
-    assert set(contra.affected) == {"run_command", "send_email"}
+    assert "Tool annotations contradict the tool's apparent capability" not in by_title
+    [contra] = by_id(report, "META-06")
+    assert contra.title == "Tool annotations contradict the tool's apparent capability"
+    assert {"run_command", "send_email"} <= set(contra.details["inconsistent"])
     assert "readOnlyHint=true" in contra.description and "destructiveHint=false" in contra.description
-    assert contra.confidence_reason
+    assert contra.severity == Severity.MEDIUM and contra.confidence_reason
     surface = by_title["High-impact tool capabilities exposed"]
     assert surface.severity == Severity.LOW and "email" in surface.details["by_class"]
     # run_command is an arbitrary shell: reported once, as such, not in the low summary.

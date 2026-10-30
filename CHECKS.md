@@ -1,6 +1,6 @@
 # mcpprobe checks catalogue
 
-Generated from the check metadata of mcpprobe 0.2.0 (`mcpprobe checks --format markdown`). Do not edit by hand.
+Generated from the check metadata of mcpprobe 0.3.0 (`mcpprobe checks --format markdown`). Do not edit by hand.
 
 Standards: OWASP MCP Top 10 (IDs `MCP0x:2025`, still a beta list, so shown with `(beta)`), OWASP Top 10 for Agentic Applications (`ASI0x`), OWASP Top 10 for LLM Applications 2026 (`LLM0x:2026`, primary) and 2025 (`LLM0x:2025`, kept for one release cycle). Severities are defaults; a check can raise or lower the severity of an individual finding (for example loopback-only servers are reported one level lower), and heuristic checks never rate a finding Critical on their own.
 
@@ -14,16 +14,24 @@ Passive checks send only what a normal MCP client would send plus a few benign m
 | [AUTH-02](#auth-02---protected-resource-metadata-rfc-9728-missing-or-invalid) | passive | high | Protected resource metadata (RFC 9728) missing or invalid | MCP07:2025 (beta) |
 | [AUTH-03](#auth-03---authorization-server-metadata-weak-or-missing-pkce-s256--https) | passive | high | Authorization server metadata weak or missing (PKCE S256 / HTTPS) | MCP07:2025 (beta), MCP01:2025 (beta) |
 | [AUTH-04](#auth-04---server-accepts-a-self-minted-token-with-the-wrong-audienceissuer) | passive | critical | Server accepts a self-minted token with the wrong audience/issuer | MCP07:2025 (beta), MCP01:2025 (beta), ASI03 |
+| [AUTH-05](#auth-05---authorization-server-does-not-advertise-rfc-9207-iss-support-2026-07-28) | passive | low | Authorization server does not advertise RFC 9207 iss support (2026-07-28) | MCP07:2025 (beta) |
+| [AUTH-06](#auth-06---deprecated-dynamic-client-registration-offered-2026-07-28) | passive | low | Deprecated Dynamic Client Registration offered (2026-07-28) | MCP07:2025 (beta) |
 | [TRANS-01](#trans-01---origin-header-not-validated-dns-rebinding-exposure) | passive | medium | Origin header not validated (DNS-rebinding exposure) | MCP07:2025 (beta) |
 | [TRANS-02](#trans-02---unsupported-mcp-protocol-version-header-not-rejected) | passive | low | Unsupported MCP-Protocol-Version header not rejected | MCP spec conformance / hygiene (no OWASP item) |
 | [TRANS-03](#trans-03---weak-predictable-or-unvalidated-mcp-session-id) | passive | high | Weak, predictable or unvalidated Mcp-Session-Id | MCP07:2025 (beta) |
 | [TRANS-04](#trans-04---deprecated-httpsse-2024-11-05-transport-in-use) | passive | info | Deprecated HTTP+SSE (2024-11-05) transport in use | MCP spec conformance / hygiene (no OWASP item) |
 | [TRANS-05](#trans-05---plain-http-weak-tls-or-missing-security-headers) | passive | high | Plain HTTP, weak TLS or missing security headers | MCP01:2025 (beta) |
+| [TRANS-06](#trans-06---serverdiscover-result-incomplete-2026-07-28) | passive | low | server/discover result incomplete (2026-07-28) | MCP spec conformance / hygiene (no OWASP item) |
+| [TRANS-07](#trans-07---protocol-version-the-server-does-not-advertise-is-accepted-downgrade) | passive | low | Protocol version the server does not advertise is accepted (downgrade) | MCP spec conformance / hygiene (no OWASP item) |
+| [TRANS-08](#trans-08---mcp-method-header-not-validated-against-the-request-body-2026-07-28) | passive | medium | Mcp-Method header not validated against the request body (2026-07-28) | MCP spec conformance / hygiene (no OWASP item) |
+| [TRANS-09](#trans-09---ttlms--cachescope-caching-hints-missing-or-invalid-2026-07-28) | passive | low | ttlMs / cacheScope caching hints missing or invalid (2026-07-28) | MCP spec conformance / hygiene (no OWASP item) |
 | [META-01](#meta-01---possible-tool-description-poisoning) | passive | high | Possible tool-description poisoning | MCP03:2025 (beta), ASI01, ASI04, LLM01:2026, LLM01:2025 |
 | [META-02](#meta-02---tool-surface-changed-since-the-stored-baseline-rug-pull-indicator) | passive | medium | Tool surface changed since the stored baseline (rug-pull indicator) | MCP03:2025 (beta), ASI04 |
-| [META-03](#meta-03---dangerous-tool-capability-exposed-or-annotations-contradict-it) | passive | high | Dangerous tool capability exposed or annotations contradict it | MCP02:2025 (beta), MCP05:2025 (beta), ASI02, ASI05, LLM03:2026, LLM06:2025 |
+| [META-03](#meta-03---dangerous-tool-capability-exposed) | passive | high | Dangerous tool capability exposed | MCP02:2025 (beta), MCP05:2025 (beta), ASI02, ASI05, LLM03:2026, LLM06:2025 |
 | [META-04](#meta-04---tool-schema-hygiene-problems) | passive | low | Tool schema hygiene problems | MCP05:2025 (beta) |
 | [META-05](#meta-05---secret-material-in-server-metadata-or-configuration) | passive | high | Secret material in server metadata or configuration | MCP01:2025 (beta), LLM02:2026, LLM02:2025 |
+| [META-06](#meta-06---tool-annotations-missing-or-inconsistent-with-the-tool) | passive | medium | Tool annotations missing or inconsistent with the tool | MCP spec conformance / hygiene (no OWASP item) |
+| [META-07](#meta-07---toxic-flow-private-data-untrusted-content-and-external-send-on-one-server) | passive | medium | Toxic flow: private data, untrusted content and external send on one server | ASI01, LLM01:2026, LLM01:2025 |
 | [ERR-01](#err-01---verbose-error-responses-leak-stack-traces-paths-or-versions) | passive | medium | Verbose error responses leak stack traces, paths or versions | MCP08:2025 (beta), LLM02:2026, LLM02:2025 |
 | [DOS-01](#dos-01---no-visible-limits-on-request-size-nesting-or-rate) | passive | low | No visible limits on request size, nesting or rate | ASI08, LLM06:2026, LLM10:2025 |
 | [INJ-01](#inj-01---commandcode-injection-safe-canaries) | active | critical | Command/code injection (safe canaries) | MCP05:2025 (beta), ASI05, LLM10:2026 |
@@ -106,6 +114,38 @@ Mints two syntactically valid JWTs the server cannot have issued (HS256 with a r
 
 **Fix.** Validate the token signature against the authorization server's keys, require 'aud' to equal this server's canonical URI (RFC 8707), reject alg=none, and never read tokens from query strings.
 
+### AUTH-05 - Authorization server does not advertise RFC 9207 iss support (2026-07-28)
+
+| | |
+|---|---|
+| Mode | passive (implemented) |
+| Default severity | low |
+| Transports | http |
+| Standards | MCP07:2025 (beta) |
+| Evidence | The authorization server metadata document AUTH-03 fetched. |
+
+2026-07-28 says MCP authorization servers SHOULD include the RFC 9207 'iss' parameter in authorization responses and, when they do, MUST advertise authorization_response_iss_parameter_supported: true in their metadata; clients reject a response without iss only when that flag is true. Reads the authorization server metadata AUTH-03 already fetched and reports a flag that is absent or not true. Sends nothing. The revision says this SHOULD is expected to become a MUST.
+
+**False positives.** The spec allows a server to emit iss before it updates its metadata; such a server is reported until the flag is published, because clients key their rejection on the flag.
+
+**Fix.** Include iss in every authorization response, error responses too (RFC 9207 section 2), and publish "authorization_response_iss_parameter_supported": true in the authorization server metadata (https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization#authorization-response-validation). With a hosted identity provider, enable its issuer-identification option.
+
+### AUTH-06 - Deprecated Dynamic Client Registration offered (2026-07-28)
+
+| | |
+|---|---|
+| Mode | passive (implemented) |
+| Default severity | low |
+| Transports | http |
+| Standards | MCP07:2025 (beta) |
+| Evidence | The authorization server metadata document AUTH-03 fetched. |
+
+2026-07-28 deprecates OAuth Dynamic Client Registration (RFC 7591) in favour of Client ID Metadata Documents, which authorization servers SHOULD support. Reads the authorization server metadata AUTH-03 already fetched: a registration_endpoint without client_id_metadata_document_supported: true is low (clients have only the deprecated path); a registration_endpoint next to CIMD support is informational (kept for backwards compatibility). No registration request is sent.
+
+**False positives.** Keeping DCR for older clients is allowed; the informational finding is a reminder to plan its removal, not a defect. An authorization server that supports neither DCR nor CIMD (pre-registration only) is not reported here.
+
+**Fix.** Support Client ID Metadata Documents and advertise "client_id_metadata_document_supported": true; keep registration_endpoint only while older clients still need it, and plan its removal (https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization/client-registration). Open registration endpoints also deserve rate limits and redirect-URI validation.
+
 ### TRANS-01 - Origin header not validated (DNS-rebinding exposure)
 
 | | |
@@ -186,6 +226,70 @@ Flags non-loopback endpoints served over plain HTTP (bearer tokens in clear), TL
 
 **Fix.** Serve the endpoint over HTTPS with TLS 1.2+ only, add Strict-Transport-Security and X-Content-Type-Options: nosniff. Where an edge (API Gateway, CloudFront, Cloudflare, Vercel) is detected the fix text says where to configure it.
 
+### TRANS-06 - server/discover result incomplete (2026-07-28)
+
+| | |
+|---|---|
+| Mode | passive (implemented) |
+| Default severity | low |
+| Transports | http, stdio |
+| Standards | MCP spec conformance / hygiene (no OWASP item) |
+| Evidence | The fingerprinting server/discover request and its complete result. |
+
+A 2026-07-28 server MUST implement server/discover. The scanner's first request is server/discover; when it is answered, its result is checked for what the revision requires: supportedVersions (a list of version strings that includes the 2026-07-28 revision the request was served under), a capabilities object and resultType 'complete'. A missing _meta['io.modelcontextprotocol/serverInfo'] (SHOULD) is reported as informational. Caching hints on the same result are checked by TRANS-09. Not applicable to servers that speak an earlier revision through initialize.
+
+**False positives.** A server that answers server/discover under an earlier result shape (for example a 'protocolVersions' key from a pre-release draft) is reported, because 2026-07-28 clients read 'supportedVersions'.
+
+**Fix.** Return the DiscoverResult defined in the 2026-07-28 schema: {"resultType":"complete","supportedVersions":["2026-07-28", ...],"capabilities":{...},"_meta":{"io.modelcontextprotocol/serverInfo":{"name":...,"version":...}},"ttlMs":...,"cacheScope":"public"} (https://modelcontextprotocol.io/specification/2026-07-28/server/discover).
+
+### TRANS-07 - Protocol version the server does not advertise is accepted (downgrade)
+
+| | |
+|---|---|
+| Mode | passive (implemented) |
+| Default severity | low |
+| Transports | http |
+| Standards | MCP spec conformance / hygiene (no OWASP item) |
+| Evidence | The server/discover result (supportedVersions) and the downgraded request with its response. |
+
+Takes supportedVersions from the server/discover result and sends one more server/discover declared (in _meta and in the MCP-Protocol-Version header) as the newest earlier revision the server does not list (2025-11-25, 2025-06-18 or 2025-03-26). The spec says a server that does not implement the requested version MUST answer HTTP 400 with UnsupportedProtocolVersionError (-32022). Serving the request anyway means a client or intermediary can push the server onto a revision it claims not to support, without the header validation and other protections of 2026-07-28. One request, no tool is called.
+
+**False positives.** A dual-era server that does serve the older revision but forgot to list it is reported too; listing it in supportedVersions is then the fix. Not applicable when every earlier revision is advertised.
+
+**Fix.** Reject any request whose declared protocol version is not in your supportedVersions with HTTP 400 and {"code":-32022,"message":"Unsupported protocol version","data":{"supported":[...],"requested":"..."}}, before doing any work (https://modelcontextprotocol.io/specification/2026-07-28/basic/versioning). If you do serve the older revision, list it in supportedVersions.
+
+### TRANS-08 - Mcp-Method header not validated against the request body (2026-07-28)
+
+| | |
+|---|---|
+| Mode | passive (implemented) |
+| Default severity | medium |
+| Transports | http |
+| Standards | MCP spec conformance / hygiene (no OWASP item) |
+| Evidence | Both probe requests (headers shown) and their responses. |
+
+2026-07-28 requires clients to mirror the JSON-RPC method into an Mcp-Method header, and servers that process the body MUST reject a request whose headers are missing or do not match the body with HTTP 400 and HeaderMismatch (-32020); otherwise a gateway that routes, rate-limits or authorises on the header can be bypassed by a body that says something else. Sends two server/discover requests: one with 'Mcp-Method: tools/list' and one with no Mcp-Method header. Mcp-Name is not tested, because it is only defined for tools/call, resources/read and prompts/get, which a passive scan does not send.
+
+**False positives.** A server that rejects the probes with another 4xx is reported as informational only. When a gateway in front rejects mismatches itself, the finding concerns the server behind it only if the gateway can be bypassed.
+
+**Fix.** Before dispatching, compare Mcp-Method (and, for tools/call, resources/read and prompts/get, the decoded Mcp-Name) with the body; when a required header is missing or differs, answer HTTP 400 with {"code":-32020,"message":"Header mismatch: ..."} (https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http#server-validation).
+
+### TRANS-09 - ttlMs / cacheScope caching hints missing or invalid (2026-07-28)
+
+| | |
+|---|---|
+| Mode | passive (implemented) |
+| Default severity | low |
+| Transports | http, stdio |
+| Standards | MCP spec conformance / hygiene (no OWASP item) |
+| Evidence | The server/discover and list results the scan already received. |
+
+2026-07-28 servers MUST include caching hints on complete results of server/discover, tools/list, prompts/list and resources/list (among others): ttlMs, a number of milliseconds that MUST be >= 0, and cacheScope, either 'public' or 'private'. Checks the results the scan already received; sends nothing. A missing cacheScope leaves shared gateways to guess whether a list may be served to other users.
+
+**False positives.** Only the first page of each list is checked. A public cacheScope on an authenticated server is allowed by the spec when the list is the same for every user, so it is not reported.
+
+**Fix.** Add "ttlMs": <milliseconds, >= 0> and "cacheScope": "public" (identical for every user) or "private" (depends on the caller's authorization) to every cacheable result (https://modelcontextprotocol.io/specification/2026-07-28/server/utilities/caching).
+
 ### META-01 - Possible tool-description poisoning
 
 | | |
@@ -218,7 +322,7 @@ Computes SHA-256 over the canonical JSON of each tool, prompt and resource defin
 
 **Fix.** Treat tool definitions as code: version them, review changes, and have clients pin and re-approve definitions when the hash changes.
 
-### META-03 - Dangerous tool capability exposed or annotations contradict it
+### META-03 - Dangerous tool capability exposed
 
 | | |
 |---|---|
@@ -228,11 +332,11 @@ Computes SHA-256 over the canonical JSON of each tool, prompt and resource defin
 | Standards | MCP02:2025 (beta), MCP05:2025 (beta), ASI02, ASI05, LLM03:2026, LLM06:2025 |
 | Evidence | The tools/list response; each affected tool's complete definition is shown as proof. |
 
-Classifies each tool by name, description and parameter names into capability classes. Tools that advertise arbitrary command execution, arbitrary file read or arbitrary file write (a shell/file capability selected by a free-form string argument with no enum, const or pattern) are rated high on their own and critical when the remote endpoint needs no authentication. Declared annotations are cross-checked (a command tool marked readOnlyHint:true is reported), and the remaining high-impact surface (network, e-mail, credentials, payments) is summarised at low severity. Passive scanning sees the advertised capability, not whether the implementation really executes: the rating is based on the name, description and schema, and no tool is called.
+Classifies each tool by name, description and parameter names into capability classes. Tools that advertise arbitrary command execution, arbitrary file read or arbitrary file write (a shell/file capability selected by a free-form string argument with no enum, const or pattern) are rated high on their own and critical when the remote endpoint needs no authentication. The remaining high-impact surface (network, e-mail, credentials, payments) is summarised at low severity. Annotations that contradict the capability are reported by META-06 (until 0.2 they were reported here). Passive scanning sees the advertised capability, not whether the implementation really executes: the rating is based on the name, description and schema, and no tool is called.
 
 **False positives.** Classification is keyword-based: a tool named 'delete_draft' that only removes the user's own draft will be classed 'delete'. A tool that advertises a shell but whose implementation is a stub is still reported, because clients and models act on the advertised capability.
 
-**Fix.** For arbitrary command execution or file access: remove the tool, or sandbox it and replace the free-form argument with an allow-list (enum) of commands or files. Annotations come after that. Make annotations truthful (destructiveHint:true for anything that executes or deletes); they help a careful client warn the user but do nothing about the risk.
+**Fix.** For arbitrary command execution or file access: remove the tool, or sandbox it and replace the free-form argument with an allow-list (enum) of commands or files. Annotations come after that (META-06); they help a careful client warn the user but do nothing about the risk.
 
 ### META-04 - Tool schema hygiene problems
 
@@ -265,6 +369,38 @@ Pattern and entropy scan for AWS/GitHub/Slack/Stripe/Google keys, private key bl
 **False positives.** Example keys from vendor documentation (for instance the AWS sample key IDs ending in EXAMPLE) match the patterns. High-entropy strings are reported at Low severity and low confidence; identifiers such as content hashes trigger them. Secrets in a stdio server's environment are expected (the spec says stdio servers take credentials from the environment) and are reported as Low so the operator can confirm least privilege.
 
 **Fix.** Remove secrets from descriptions and resources, rotate anything that was exposed, and pass credentials through the environment or a secret store, never through metadata.
+
+### META-06 - Tool annotations missing or inconsistent with the tool
+
+| | |
+|---|---|
+| Mode | passive (implemented) |
+| Default severity | medium |
+| Transports | http, stdio |
+| Standards | MCP spec conformance / hygiene (no OWASP item) |
+| Evidence | The tools/list response; each affected tool's name, title and annotations are shown as proof. |
+
+Reads each tool's annotations from tools/list. Reported as missing: readOnlyHint, openWorldHint and a title (tool.title or annotations.title) on every tool, and destructiveHint and idempotentHint on every tool not marked readOnlyHint:true (the spec says those two are meaningful only when readOnlyHint is false). Reported as inconsistent: readOnlyHint:true on a tool that looks like it executes, writes, deletes, sends or pays; destructiveHint:false on a tool that looks like it executes, deletes or overwrites; openWorldHint:false on a tool that reaches the network; a hint that is not a boolean; and, as low-severity noise, destructiveHint:true on a tool that only appears to read. Medium when a dangerous-class tool is mislabelled, low when annotations are merely missing. One finding lists every affected tool. Anthropic's directory policy (5E) and OpenAI's app review both require accurate annotations.
+
+**False positives.** The capability behind a contradiction is inferred from keywords in the tool's name, description and parameter names, so a narrowly scoped tool (for example 'delete_draft' that only removes the caller's own draft) may be misread. Missing annotations are a plain observation. Annotations are hints that clients must treat as untrusted; correcting them does not change what a tool can do.
+
+**Fix.** Give every tool a title and set readOnlyHint and openWorldHint explicitly; for tools that are not read-only also set destructiveHint and idempotentHint. Make each value true to the implementation: readOnlyHint:true only when nothing is modified, destructiveHint:true for anything that executes, deletes or overwrites, openWorldHint:true for tools that reach the internet or other external systems. Anthropic's Software Directory Policy (5E, https://support.claude.com/en/articles/13145358-anthropic-software-directory-policy) requires all applicable annotations, and OpenAI's app review (https://developers.openai.com/plugins/deploy/app-review.md) checks readOnlyHint, destructiveHint and openWorldHint for accuracy.
+
+### META-07 - Toxic flow: private data, untrusted content and external send on one server
+
+| | |
+|---|---|
+| Mode | passive (implemented) |
+| Default severity | medium |
+| Transports | http, stdio |
+| Standards | ASI01, LLM01:2026, LLM01:2025 |
+| Evidence | The tools/list response; each role lists its tools and the wording that put them there. |
+
+Classifies every advertised tool into three roles from its capability class and wording: access to private data (files, databases, credentials, the user's mail), intake of untrusted content (fetching URLs, web search, reading mail or messages written by others) and a way to send data out (sending e-mail or messages, HTTP posts, webhooks, uploads). A tool advertising arbitrary command execution counts for all three; arbitrary file read counts as private data. When one server offers all three roles, text planted in the untrusted content can instruct the model to read the private data and send it away: the 'lethal trifecta' of prompt injection. Medium, high when the HTTP endpoint needs no authentication. One finding lists the tools in each role. No tool is called.
+
+**False positives.** Roles are inferred from names, descriptions and capability keywords, not from behaviour. A 'fetch' tool restricted to one internal API, or a 'send' tool that only notifies the signed-in user, is still counted. Conversely a fetch tool with a free-form URL can leak data through the URL itself; that path is not counted as a send role.
+
+**Fix.** Break the trifecta: split the tools across separate servers (or separate client configurations) so no single agent session combines private data, untrusted content and an outbound channel; or gate the send tool behind explicit per-call user confirmation and an allow-list of destinations; or constrain the intake tool to trusted sources. Keep the server authenticated so nobody else can drive the combination.
 
 ### ERR-01 - Verbose error responses leak stack traces, paths or versions
 

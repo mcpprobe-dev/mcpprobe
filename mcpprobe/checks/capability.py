@@ -247,3 +247,109 @@ def arbitrary_capabilities(tool: dict[str, Any]) -> dict[str, str]:
 
 def classify_tools(tools: list[dict[str, Any]]) -> dict[str, Classification]:
     return {str(t.get("name", "")): classify_tool(t) for t in tools}
+
+
+# ----------------------------------------------------------------------------- toxic-flow roles (META-07)
+ROLE_PRIVATE = "private_data"
+ROLE_UNTRUSTED = "untrusted_content"
+ROLE_SEND = "external_send"
+
+#: Reading mail or messages: private data and, at the same time, content written by strangers.
+_INBOX_READ = re.compile(
+    r"\b(inbox|mailbox|unread|read\s*_?(e-?mails?|mail|messages?)|"
+    r"(list|get|search|fetch|retrieve)\s*_?(e-?mails?|mail|messages?))\b",
+    re.I,
+)
+#: Pulling content from the open web.
+_WEB_INTAKE = re.compile(
+    r"\b(fetch|browse|crawl|scrape|download|web\s*_?search|search\s*_?(the\s+)?web|"
+    r"(read|get|open|load)\s*_?(a\s+|the\s+)?(url|web\s*page|page|website)|rss|feed)\b",
+    re.I,
+)
+#: Moving data out of the server's own boundary.
+_SEND_OUT = re.compile(
+    r"\b(send|sends|post|posts|publish|tweet|webhook|notify|upload|transmit|forward|reply|"
+    r"smtp|share|e-?mail\s+(to|a|an)\b)",
+    re.I,
+)
+#: Verbs that make an e-mail or payment tool a write rather than a read.
+_MUTATING = re.compile(
+    r"\b(send|sends|post|charge|refund|pay|transfer|create|cancel|delete|update|write|forward|reply)\b",
+    re.I,
+)
+
+#: Classes that change or destroy state on their own (no verb needed).
+MUTATING_CLASSES: frozenset[str] = frozenset({"exec", "file_write", "database_write", "delete"})
+#: Classes that are writes only when a mutating verb is present.
+VERB_MUTATING_CLASSES: frozenset[str] = frozenset({"email", "payments"})
+_PRIVATE_LABEL = {
+    "file_read": "files",
+    "database_read": "a database",
+    "database_write": "a database",
+    "credentials": "credentials",
+}
+
+#: Classes that only read.
+READ_CLASSES: frozenset[str] = frozenset({"search", "file_read", "database_read"})
+
+
+def _plain_text(tool: dict[str, Any]) -> str:
+    """Name (with separators as spaces), title and description; parameter names excluded."""
+    name = str(tool.get("name", ""))
+    spaced = name.replace("_", " ").replace("-", " ").replace(".", " ")
+    return " ".join([name, spaced, str(tool.get("title") or ""), str(tool.get("description") or "")])
+
+
+def looks_mutating(tool: dict[str, Any], cls: Classification) -> bool:
+    """Whether the advertised capability changes state (used for annotation contradictions)."""
+    if ARBITRARY_EXEC in cls.arbitrary or ARBITRARY_FILE_WRITE in cls.arbitrary:
+        return True
+    if any(c in MUTATING_CLASSES for c in cls.classes):
+        return True
+    return any(c in VERB_MUTATING_CLASSES for c in cls.classes) and bool(_MUTATING.search(_plain_text(tool)))
+
+
+def looks_destructive(cls: Classification) -> bool:
+    """Execution, deletion and overwriting writes (destructiveHint:false would be wrong)."""
+    return (
+        ARBITRARY_EXEC in cls.arbitrary
+        or ARBITRARY_FILE_WRITE in cls.arbitrary
+        or any(c in MUTATING_CLASSES for c in cls.classes)
+    )
+
+
+def looks_read_only(tool: dict[str, Any], cls: Classification) -> bool:
+    """Only read classes matched and nothing suggests a write."""
+    return bool(cls.classes) and set(cls.classes) <= READ_CLASSES and not looks_mutating(tool, cls)
+
+
+def toxic_roles(tool: dict[str, Any], cls: Classification) -> dict[str, str]:
+    """Lethal-trifecta roles a tool can play, each with the reason (from its advertised metadata).
+
+    Arbitrary command execution plays all three (a shell reads local data, fetches
+    content and sends it anywhere); arbitrary file read is private data.
+    """
+    text = _plain_text(tool)
+    roles: dict[str, str] = {}
+    if ARBITRARY_EXEC in cls.arbitrary:
+        why = "arbitrary command execution (see META-03)"
+        return {ROLE_PRIVATE: why, ROLE_UNTRUSTED: why, ROLE_SEND: why}
+    classes = set(cls.classes)
+    if ARBITRARY_FILE_READ in cls.arbitrary:
+        roles[ROLE_PRIVATE] = "arbitrary file read (see META-03)"
+    elif classes & set(_PRIVATE_LABEL):
+        labels = sorted({_PRIVATE_LABEL[c] for c in classes & set(_PRIVATE_LABEL)})
+        roles[ROLE_PRIVATE] = "accesses " + " and ".join(labels)
+    inbox = _INBOX_READ.search(text) if "email" in classes else None
+    if inbox:
+        roles.setdefault(ROLE_PRIVATE, f"reads mail or messages ('{inbox.group(0)}')")
+        roles[ROLE_UNTRUSTED] = f"returns mail or messages written by others ('{inbox.group(0)}')"
+    if "network" in classes:
+        web = _WEB_INTAKE.search(text)
+        if web:
+            roles[ROLE_UNTRUSTED] = f"pulls content from the web ('{web.group(0)}')"
+    if classes & {"email", "network"}:
+        out = _SEND_OUT.search(text)
+        if out:
+            roles[ROLE_SEND] = f"sends data out ('{out.group(0).strip()}')"
+    return roles

@@ -37,8 +37,21 @@ HANDSHAKE_VERSIONS: frozenset[str] = frozenset({PROTOCOL_2025_11_25, PROTOCOL_20
 
 #: ``_meta`` key carrying the protocol version in 2026-07-28 requests.
 META_VERSION_KEY = "io.modelcontextprotocol/protocolVersion"
+META_CAPABILITIES_KEY = "io.modelcontextprotocol/clientCapabilities"
+META_CLIENT_INFO_KEY = "io.modelcontextprotocol/clientInfo"
+META_SERVER_INFO_KEY = "io.modelcontextprotocol/serverInfo"
+
+#: JSON-RPC error codes defined by the 2026-07-28 revision.
+ERROR_HEADER_MISMATCH = -32020
+ERROR_UNSUPPORTED_PROTOCOL_VERSION = -32022
+
+#: Handshake-era revisions a modern server may or may not still serve (newest first).
+EARLIER_REVISIONS: tuple[str, ...] = ("2025-11-25", "2025-06-18", "2025-03-26")
 
 CLIENT_INFO: dict[str, str] = {"name": "mcpprobe", "version": __version__}
+
+#: Default cap on the total time a scan spends waiting on HTTP 429 / Retry-After.
+DEFAULT_THROTTLE_BUDGET = 30.0
 
 
 class TransportError(Exception):
@@ -99,6 +112,12 @@ class Transport(abc.ABC):
         self._ids = itertools.count(1)
         #: Negotiated protocol version; set by the fingerprinter.
         self.protocol_version: str | None = None
+        #: Rate-limit handling (HTTP only; stdio never answers 429). Total seconds the
+        #: scan may spend waiting on Retry-After, seconds waited so far, and how many
+        #: 429 responses were handed back to a caller because the budget ran out.
+        self.throttle_budget: float = DEFAULT_THROTTLE_BUDGET
+        self.throttle_waited: float = 0.0
+        self.throttle_exhausted: int = 0
 
     def next_id(self) -> int:
         return next(self._ids)
@@ -124,8 +143,12 @@ class Transport(abc.ABC):
             body["id"] = msg_id if msg_id is not None else self.next_id()
         p: dict[str, Any] = dict(params or {})
         if version == PROTOCOL_2026_07_28:
+            # Every 2026-07-28 request carries its version and capabilities (both
+            # required) and, as the spec recommends, the client's identity.
             meta = dict(p.get("_meta") or {})
             meta.setdefault(META_VERSION_KEY, version)
+            meta.setdefault(META_CAPABILITIES_KEY, {})
+            meta.setdefault(META_CLIENT_INFO_KEY, dict(CLIENT_INFO))
             p["_meta"] = meta
         if p or not notification:
             body["params"] = p

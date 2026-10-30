@@ -44,10 +44,13 @@ class NotApplicable(Exception):  # noqa: N818 - it is an outcome, not an error
     (e.g. ``"AUTH-01"``). A not-applicable check never counts as a pass.
     """
 
-    def __init__(self, reason: str, related_to: str | None = None) -> None:
+    def __init__(self, reason: str, related_to: str | None = None, *, blocked: bool = False) -> None:
         super().__init__(reason)
         self.reason = reason
         self.related_to = related_to
+        #: True when the behaviour exists but could not be observed (authentication,
+        #: rate limiting, a fetch the operator disabled), as opposed to being absent.
+        self.blocked = blocked
 
 
 @dataclass(slots=True)
@@ -140,9 +143,10 @@ class ScanContext:
                 "tools/list requires authentication and no credentials were supplied, so no tool "
                 "metadata could be read; re-run with --header 'Authorization: Bearer ...' to assess it.",
                 related_to=None,
+                blocked=True,
             )
         if inv.tools_error:
-            raise NotApplicable(f"the tool list could not be read ({inv.tools_error}).")
+            raise NotApplicable(f"the tool list could not be read ({inv.tools_error}).", blocked=True)
         raise NotApplicable(
             "the server lists no tools, prompts or resources, so there is no metadata to assess."
         )
@@ -166,6 +170,9 @@ class Check(abc.ABC):
     false_positive_notes: str = ""
     #: Default remediation text.
     fix: str = ""
+    #: When False (the default) a check that met an HTTP 429 the scanner could not wait
+    #: out is reported not applicable instead of drawing conclusions from it.
+    handles_rate_limit: bool = False
 
     @abc.abstractmethod
     async def run(self, ctx: ScanContext) -> list[Finding]:

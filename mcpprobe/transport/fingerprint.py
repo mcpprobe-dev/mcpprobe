@@ -20,6 +20,7 @@ from mcpprobe.models import Fingerprint
 from mcpprobe.transport.base import (
     CLIENT_INFO,
     HANDSHAKE_VERSIONS,
+    META_SERVER_INFO_KEY,
     PROTOCOL_2026_07_28,
     RpcResponse,
     Transport,
@@ -43,7 +44,8 @@ def _attempt(version: str, method: str, resp: RpcResponse) -> dict[str, Any]:
 
 
 def _absorb_server_result(fp: Fingerprint, result: dict[str, Any]) -> None:
-    info = result.get("serverInfo") or result.get("identity") or result.get("server") or {}
+    meta = result.get("_meta")
+    info = (meta.get(META_SERVER_INFO_KEY) if isinstance(meta, dict) else None) or result.get("serverInfo")
     if isinstance(info, dict):
         fp.server_info = info
     caps = result.get("capabilities")
@@ -76,13 +78,10 @@ async def fingerprint(transport: Transport) -> Fingerprint:
         fp.protocol_version = PROTOCOL_2026_07_28
         transport.protocol_version = PROTOCOL_2026_07_28
         _absorb_server_result(fp, resp.result)
-        versions = (
-            resp.result.get("protocolVersions")
-            or resp.result.get("supportedVersions")
-            or resp.result.get("versions")
-        )
-        if versions:
-            fp.server_info = {**fp.server_info, "supportedVersions": versions}
+        fp.discover_result = resp.result
+        versions = resp.result.get("supportedVersions")
+        if isinstance(versions, list):
+            fp.supported_versions = [v for v in versions if isinstance(v, str)]
         return fp
 
     # 2. Handshake revisions

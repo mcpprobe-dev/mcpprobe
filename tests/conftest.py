@@ -87,6 +87,7 @@ async def run(
     txt_lookup=None,
     authorisation=None,
     headers=None,
+    max_rate_limit_wait: float = 30.0,
     **opts,
 ):
     """Run a full scan against a fake target at a high rate cap (test-only override)."""
@@ -105,6 +106,7 @@ async def run(
         txt_lookup=txt_lookup,
         authorisation=authorisation,
         headers=headers or {},
+        max_rate_limit_wait=max_rate_limit_wait,
         _unsafe_allow_any_rate=True,
     )
     if route_port is not None:

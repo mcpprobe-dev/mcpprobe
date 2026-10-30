@@ -144,6 +144,15 @@ def curl_rpc(
     return line
 
 
+def modern_params(version: str = "2026-07-28", **extra: Any) -> dict[str, Any]:
+    """Params for a 2026-07-28 request: the required ``_meta`` plus ``extra``."""
+    meta = {
+        "io.modelcontextprotocol/protocolVersion": version,
+        "io.modelcontextprotocol/clientCapabilities": {},
+    }
+    return {**extra, "_meta": meta}
+
+
 def initialize_params(version: str = "2025-11-25") -> dict[str, Any]:
     return {"protocolVersion": version, "capabilities": {}, "clientInfo": VERIFY_CLIENT}
 

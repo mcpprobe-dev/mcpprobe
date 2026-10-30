@@ -28,11 +28,13 @@ from mcpprobe.authz import (
 from mcpprobe.checks import ALL_CHECKS, ScanOptions
 from mcpprobe.checks._util import host_of
 from mcpprobe.dnsutil import record_name
+from mcpprobe.judges import JudgeUnavailable, load_judge
 from mcpprobe.models import CheckMode, Severity
 from mcpprobe.policy import DEFAULT_RATE, MAX_RATE, OptOutError
 from mcpprobe.report import render, write_json, write_sarif
 from mcpprobe.scanner import ScanConfig, run_scan
 from mcpprobe.transport import TransportError, ensure_url
+from mcpprobe.transport.base import DEFAULT_THROTTLE_BUDGET
 
 EXIT_CLEAN = 0
 EXIT_FINDINGS = 1
@@ -133,6 +135,30 @@ def _parse_kv(values: Sequence[str], what: str, sep: str) -> dict[str, str]:
     is_flag=True,
     help="AUTH-03: do not fetch authorization-server metadata on third-party hosts.",
 )
+@click.option(
+    "--rate-limit-wait",
+    default=DEFAULT_THROTTLE_BUDGET,
+    show_default=True,
+    type=click.FloatRange(min=0, max=300),
+    help="Total seconds to wait on HTTP 429 / Retry-After; when used up, affected checks are not applicable.",
+)
+@click.option(
+    "--judge",
+    "judge_spec",
+    help="Opt-in second opinion for META-01, e.g. hf:<model-id-or-path> (needs mcpprobe-scanner[hf]).",
+)
+@click.option(
+    "--judge-download",
+    is_flag=True,
+    help="Allow --judge hf:<model-id> to download the model from the Hugging Face Hub (default: local cache only).",
+)
+@click.option(
+    "--judge-threshold",
+    default=0.5,
+    show_default=True,
+    type=click.FloatRange(min=0.01, max=0.99),
+    help="Classifier score at or above which the judge flags a description.",
+)
 @click.option("--only", multiple=True, help="Run only these check IDs (repeatable).")
 @click.option("--skip", multiple=True, help="Skip these check IDs (repeatable).")
 @click.option("--insecure", is_flag=True, help="Do not verify the target's TLS certificate.")
@@ -159,6 +185,10 @@ def scan_cmd(
     baseline_path: str | None,
     no_write_baseline: bool,
     no_follow_as: bool,
+    rate_limit_wait: float,
+    judge_spec: str | None,
+    judge_download: bool,
+    judge_threshold: float,
     only: Sequence[str],
     skip: Sequence[str],
     insecure: bool,
@@ -191,7 +221,15 @@ def scan_cmd(
             err.print(f"authorisation refused: {exc}", markup=False, highlight=False)
             err.print("active mode was not started; no request was sent to the target.", markup=False)
             sys.exit(EXIT_ERROR)
+        judge = None
+        if judge_spec:
+            try:
+                judge = load_judge(judge_spec, allow_download=judge_download, threshold=judge_threshold)
+            except JudgeUnavailable as exc:
+                err.print(f"judge not loaded: {exc}", markup=False, highlight=False)
+                sys.exit(EXIT_ERROR)
         options = ScanOptions(
+            judge=judge,
             mode=CheckMode.ACTIVE if active else CheckMode.PASSIVE,
             baseline_path=baseline_path,
             write_baseline=not no_write_baseline,
@@ -212,6 +250,7 @@ def scan_cmd(
             authorisation=record if active else None,
             user_agent=USER_AGENT,
             verify_tls=not insecure,
+            max_rate_limit_wait=rate_limit_wait,
         )
         if not quiet:
             console.print(

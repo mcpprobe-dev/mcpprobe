@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 EVIDENCE_BODY_LIMIT = 64 * 1024
 
 #: Version of the JSON report schema (see docs/report-schema.md).
-REPORT_SCHEMA_VERSION = "0.2"
+REPORT_SCHEMA_VERSION = "0.3"
 
 
 class Severity(str, Enum):
@@ -192,6 +192,14 @@ class CheckResult(BaseModel):
     )
     findings: list[Finding] = Field(default_factory=list)
     duration_ms: float | None = None
+    blocked: bool = Field(
+        default=False,
+        description=(
+            "Only for not_applicable: true when the behaviour exists but could not be observed "
+            "(hidden by authentication, rate limiting or a request the scanner chose not to send), "
+            "false when the precondition is genuinely absent"
+        ),
+    )
 
     @property
     def passed(self) -> bool:
@@ -216,6 +224,11 @@ class Fingerprint(BaseModel):
         description="The operator supplied credential headers; auth_required then reflects an unauthenticated probe",
     )
     server_info: dict[str, Any] = Field(default_factory=dict)
+    supported_versions: list[str] = Field(
+        default_factory=list, description="DiscoverResult.supportedVersions (2026-07-28 servers only)"
+    )
+    #: The complete server/discover result, kept for the 2026-07-28 checks (not serialised).
+    discover_result: dict[str, Any] | None = Field(default=None, exclude=True)
     capabilities: dict[str, Any] = Field(default_factory=dict)
     instructions: str | None = None
     attempts: list[dict[str, Any]] = Field(default_factory=list)
@@ -234,6 +247,9 @@ class Inventory(BaseModel):
     tools_evidence: EvidenceRecord | None = None
     prompts_evidence: EvidenceRecord | None = None
     resources_evidence: EvidenceRecord | None = None
+    #: Result fields other than the item list (ttlMs, cacheScope, resultType, ...) of the
+    #: first page of each list method, keyed by method name.
+    result_fields: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     def summary(self) -> dict[str, int]:
         return {
@@ -279,6 +295,29 @@ class Environment(BaseModel):
     signals: list[str] = Field(default_factory=list, description="Headers that identified the edge")
 
 
+class ReadinessStatus(str, Enum):
+    """Whether a directory requirement is satisfied, as far as a scan can tell."""
+
+    MET = "met"
+    NOT_MET = "not_met"
+    NOT_ASSESSABLE = "not_assessable"
+
+
+class ReadinessItem(BaseModel):
+    """One listing requirement of a public MCP directory, mapped onto check outcomes.
+
+    Derived only from checks that actually ran. Anything a scan cannot decide is
+    ``not_assessable`` with the reason in ``note``; it is never reported as met.
+    """
+
+    directory: str = Field(description="'anthropic' | 'openai' | 'hubspot'")
+    requirement: str
+    source_url: str
+    status: ReadinessStatus
+    check_ids: list[str] = Field(default_factory=list)
+    note: str = ""
+
+
 class ScanReport(BaseModel):
     """Top-level report document."""
 
@@ -298,6 +337,7 @@ class ScanReport(BaseModel):
     findings: list[Finding] = Field(default_factory=list)
     attestations: list[AttestationItem] = Field(default_factory=list)
     chains: list[Chain] = Field(default_factory=list)
+    readiness: list[ReadinessItem] = Field(default_factory=list)
     environment: Environment | None = None
     evidence_count: int = 0
     authorisation_record: str | None = Field(

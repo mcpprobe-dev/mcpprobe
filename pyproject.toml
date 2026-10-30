@@ -35,6 +35,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Opt-in local classifier for META-01 (--judge hf:<model>). Heavy: pulls in torch.
+hf = [
+  "transformers>=4.40",
+  "torch>=2.2",
+  "safetensors>=0.4",
+]
 dev = [
   "pytest>=8.0",
   "pytest-asyncio>=0.23",
@@ -59,6 +65,8 @@ path = "mcpprobe/__init__.py"
 include = [
   "/mcpprobe",
   "/tests",
+  "/scripts",
+  "/docs",
   "/README.md",
   "/CHECKS.md",
   "/SECURITY.md",
@@ -95,5 +103,5 @@ warn_unreachable = true
 show_error_codes = true
 
 [[tool.mypy.overrides]]
-module = ["dns", "dns.*"]
+module = ["dns", "dns.*", "transformers", "transformers.*", "torch", "torch.*"]
 ignore_missing_imports = true
