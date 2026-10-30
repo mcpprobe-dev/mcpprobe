@@ -40,30 +40,30 @@ listing from a release cut after `launch-prep` is merged.
 
 1. Merge `launch-prep` into `main` (review the diff first; it changes `action.yml`,
    `mcpprobe/action.py`, the README Action snippet, tests and docs only).
-2. Bump the version for a patch release: set `__version__ = "0.2.1"` in
-   `mcpprobe/__init__.py`, move the `[Unreleased]` CHANGELOG entry under `[0.2.1]`,
-   commit, then `git tag v0.2.1 && git push origin main v0.2.1`.
+2. Bump the version for a patch release: set `__version__` is already "0.3.0" in
+   `mcpprobe/__init__.py`, move the `[Unreleased]` CHANGELOG entry under `[0.3.0]`,
+   commit, then `create the v0.3.0 release on GitHub (tag on publish)`.
    The tag push also runs `release.yml`, which publishes `mcpprobe-scanner` 0.2.1 to
    PyPI (the release workflow requires the tag to match `__version__`).
 3. Wait for CI to pass on the tag (the `docker-action` job builds the Action image).
 4. On github.com open `mcpprobe-dev/mcpprobe` and click `action.yml`. A banner offers
    to publish the action: click **Draft a release**. (Or **Releases -> Draft a new
    release**, or edit an existing release.)
-5. Choose the tag **v0.2.1**. Tick **Publish this Action to the GitHub Marketplace**.
+5. Choose the tag **v0.3.0**. Tick **Publish this Action to the GitHub Marketplace**.
 6. If the box is disabled, follow the link to accept the Marketplace Developer
    Agreement (org owner), then reload.
 7. Wait for the metadata check to show **Everything looks good!** Fix anything it
    flags in `action.yml` (name, description, branding) and re-tag if needed.
 8. **Primary Category:** Security. **Another Category:** Continuous integration.
-9. **Release title:** `v0.2.1`. **Description:** the two-sentence description
+9. **Release title:** `v0.3.0`. **Description:** the two-sentence description
    above, then the CHANGELOG entry and the copy-paste snippet from
-   `docs/github-action.md` with `@v0.2.1`.
+   `docs/github-action.md` with `@v0.3.0`.
 10. Click **Publish release** and confirm with 2FA.
 11. Open the Marketplace page from the release, check the README renders and the
     badge shows the green shield.
 12. Update the snippets in `README.md` and `docs/github-action.md` from `@v0.3.0` to
-    `@v0.2.1`, and optionally add a moving major tag (`v0`) for users who want
-    patch updates: `git tag -f v0 v0.2.1 && git push -f origin v0`.
+    `@v0.3.0`, and optionally add a moving major tag (`v0`) for users who want
+    patch updates: `git tag -f v0 v0.3.0 && git push -f origin v0`.
 
 ## README sections the listing relies on
 
