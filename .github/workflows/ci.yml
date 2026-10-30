@@ -65,6 +65,13 @@ jobs:
           set -e
           test "$code" = "1"   # the fake server is deliberately vulnerable
           test -s smoke.sarif
+          python -m tests.fake_server --preset html --port 8766 &
+          sleep 1
+          set +e
+          /tmp/venv/bin/mcpprobe http://127.0.0.1:8766/ --json notmcp.json
+          code=$?
+          set -e
+          test "$code" = "3"   # an ordinary web site is not an MCP server: no passes, distinct exit code
       - uses: actions/upload-artifact@v4
         with:
           name: dist

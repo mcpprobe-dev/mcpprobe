@@ -47,7 +47,7 @@ which checks ran, which were skipped and why. `mcpprobe checks` lists every chec
 |---|---|---|
 | Authentication | AUTH-01..04 | endpoint answers without credentials; missing RFC 9728 protected-resource metadata; no PKCE S256; accepts a self-minted JWT with the wrong audience; token accepted in the query string |
 | Transport | TRANS-01..05 | `Origin` not validated (DNS rebinding); bogus `MCP-Protocol-Version` accepted; weak or forgeable `Mcp-Session-Id`; deprecated HTTP+SSE; plain HTTP, weak TLS, missing headers |
-| Tool metadata | META-01..05 | hidden instructions, cross-tool shadowing, credential paths, URLs, base64, zero-width/bidi/homoglyph Unicode; rug-pull diff against a stored SHA-256 baseline; annotations that contradict capability; schema hygiene; secrets in descriptions or stdio env |
+| Tool metadata | META-01..05 | instructions aimed at the model ("always call this first", "do not tell the user"), requests to send conversation, system prompt or secrets out, cross-tool shadowing, credential paths, URLs, base64, HTML comments, zero-width/bidi/homoglyph Unicode; rug-pull diff against a stored SHA-256 baseline; advertised arbitrary command execution or file access (high, critical when unauthenticated) and annotations that contradict capability; schema hygiene; secrets in descriptions or stdio env |
 | Robustness | ERR-01, DOS-01 | stack traces and versions in errors; one oversized argument, one 64-deep nesting probe and 20 paced `tools/list` calls, never more |
 | Active (gated stubs) | INJ-01..05, SUPPLY-01/02, SANDBOX-01 | registered and reported as `not_implemented` in this release |
 | Governance | GOV-01..05 | listed as attestation-only: not assessable by a scan, never marked passed |
@@ -109,7 +109,8 @@ opt-outs (below), but those are courtesy mechanisms, not permission.
 |---|---|
 | `0` | No finding at or above `--fail-on` (default `high`) |
 | `1` | At least one finding at or above `--fail-on` |
-| `2` | Error: target unreachable or not MCP, bad arguments, ownership verification failed, authorisation refused, or the target opted out |
+| `2` | Error: target unreachable, bad arguments, ownership verification failed, authorisation refused, or the target opted out |
+| `3` | The target answered but is not an MCP server (for example an ordinary web site); every check is reported not applicable and nothing passes |
 
 ## SARIF and GitHub code scanning
 
@@ -164,8 +165,12 @@ description after approval is the classic rug pull) and update the file; use
 ## Reports and evidence
 
 - `--json FILE`: the full report, including every request/response pair (timestamp,
-  method, status, a header subset, bodies truncated to 4 KB). `Authorization` values
-  and recognised secret patterns are redacted.
+  method, status, every header, bodies up to 64 KiB). Credential headers and
+  recognised secret patterns are redacted. Each finding carries a `proof` excerpt
+  built from parsed data, a runnable `verify` line and, when confidence is not high,
+  a `confidence_reason`. Checks whose preconditions are absent are reported
+  `not_applicable` with a reason and never count as passed. The schema is documented
+  in [docs/report-schema.md](docs/report-schema.md).
 - `--sarif FILE`: SARIF 2.1.0.
 - `-v`: descriptions and scan notes in the terminal; `-q`: no terminal output.
 
