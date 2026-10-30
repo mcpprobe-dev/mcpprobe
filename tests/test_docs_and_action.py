@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from mcpprobe.action import build_argv, run
+from mcpprobe.action import build_argv, describe, run
 from mcpprobe.catalogue import checks_markdown
 from mcpprobe.checks import ALL_CHECKS
-from mcpprobe.cli import EXIT_ERROR, EXIT_FINDINGS, main
+from mcpprobe.cli import EXIT_CLEAN, EXIT_ERROR, EXIT_FINDINGS, EXIT_NOT_MCP, main
 from mcpprobe.governance import GOVERNANCE_ITEMS
 from tests.conftest import stdio_command
 
@@ -76,8 +76,38 @@ def test_action_run_writes_outputs(live_server, tmp_path, monkeypatch):
         )
     assert code == EXIT_FINDINGS
     assert (tmp_path / "mcpprobe.sarif").exists()
-    assert out.read_text().splitlines() == ["sarif-file=mcpprobe.sarif", "exit-code=1"]
+    assert out.read_text().splitlines() == ["sarif-file=mcpprobe.sarif", "exit-code=1", "result=findings"]
     assert run({}) == EXIT_ERROR
+
+
+def test_action_surfaces_not_mcp(live_server, tmp_path, monkeypatch, capsys):
+    """Exit 3 must be visible in the log, the outputs and the job summary, not just a red step."""
+    monkeypatch.chdir(tmp_path)
+    out, summary = tmp_path / "gh_output", tmp_path / "summary.md"
+    with live_server("html") as srv:
+        code = run(
+            {
+                "INPUT_TARGET": srv.url,
+                "INPUT_RATE": "10",
+                "INPUT_EXTRA-ARGS": "-q",
+                "GITHUB_OUTPUT": str(out),
+                "GITHUB_STEP_SUMMARY": str(summary),
+            }
+        )
+    assert code == EXIT_NOT_MCP
+    assert "exit-code=3" in out.read_text().splitlines()
+    assert "result=not-mcp" in out.read_text().splitlines()
+    assert "::error title=mcpprobe%3A not an MCP server::" in capsys.readouterr().err
+    assert "not-mcp (exit 3" in summary.read_text()
+
+
+def test_action_describe_every_exit_code():
+    counts = {"critical": 0, "high": 1, "medium": 2, "low": 0, "info": 0}
+    assert describe(EXIT_CLEAN, "u", "critical", counts)[0] == "notice"
+    level, title, message = describe(EXIT_FINDINGS, "u", "high", counts)
+    assert (level, title) == ("error", "mcpprobe: findings") and "1 high, 2 medium" in message
+    assert describe(EXIT_NOT_MCP, "u", "high", {})[1] == "mcpprobe: not an MCP server"
+    assert describe(EXIT_ERROR, "u", "high", {})[1] == "mcpprobe: scan error"
 
 
 def test_main_accepts_options_before_target():

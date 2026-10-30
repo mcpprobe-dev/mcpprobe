@@ -151,18 +151,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: mcpprobe-dev/mcpprobe@v0.1.0
+      - uses: mcpprobe-dev/mcpprobe@v0.3.0
+        id: scan
         with:
           target: https://staging.your-server.example/mcp
           fail-on: high
           sarif-output: mcpprobe.sarif
           sarif-location: src/server.py   # optional: anchor alerts to a repo file
+      # Upload only when the scan ran (exit 0 or 1). Exit 2 (error) and 3 (not an MCP
+      # server) produce SARIF with no results, which would close every open alert.
       - uses: github/codeql-action/upload-sarif@v3
-        if: always()
+        if: ${{ !cancelled() && (steps.scan.outputs.exit-code == '0' || steps.scan.outputs.exit-code == '1') }}
         with:
           sarif_file: mcpprobe.sarif
           category: mcpprobe
 ```
+
+Inputs, outputs, exit codes and a manual-dispatch example are in
+[docs/github-action.md](docs/github-action.md).
 
 Or from any CI with the CLI:
 
