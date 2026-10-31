@@ -6,6 +6,22 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `mcpprobe registry-report fetch|scan|calibrate|aggregate|render` (also
+  `python -m mcpprobe.registry`): a resumable pipeline for an anonymised "State of MCP
+  server security" report over the official MCP Registry. It covers:
+  - paging the list API;
+  - remote and package-only selection;
+  - static META-01/06/07 on the tool definitions in registry entries;
+  - a passive survey-profile batch scan (opt-out first, 1 request/s per provider,
+    at most 8 hosts in parallel, public addresses only with pinned connections,
+    same origin only, stop on 429/403, no response bodies stored);
+  - aggregates with 95% Wilson intervals;
+  - a Markdown/SVG report that refuses to name third-party hosts.
+
+  See [docs/registry-report.md](docs/registry-report.md).
+
 ## [0.3.0]
 
 Directory readiness, the 2026-07-28 protocol rules, tool annotations and toxic flows.

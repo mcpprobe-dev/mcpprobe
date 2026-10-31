@@ -127,6 +127,14 @@ opt-outs (below), but those are courtesy mechanisms, not permission.
   - an HTTP `200` at `/.well-known/mcpprobe-opt-out`.
 - Rate: 5 requests/second by default (`--rate`), hard ceiling 10.
 
+## Registry survey report
+
+`mcpprobe registry-report` builds an anonymised, aggregate-only report on the remote
+servers listed in the official MCP Registry. It uses a reduced passive profile (only what
+an ordinary MCP client sends) and honours opt-outs. It paces traffic at 1 request per
+second per provider and stops at the first 429 or 403. How to run it and the disclosure
+process are in [docs/registry-report.md](docs/registry-report.md).
+
 ## Exit codes
 
 | Code | Meaning |
