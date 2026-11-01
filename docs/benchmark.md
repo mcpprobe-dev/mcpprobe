@@ -69,7 +69,7 @@ Per package (share of real packages with at least one flagged description; the a
 
 ## Run notes
 
-- mcpprobe 0.3.0, run 2026-11-01.
+- mcpprobe 0.3.1, run 2026-11-01.
 - No judge evaluated (pass --judge hf:<model> with the [hf] extra installed).
 
 ## The 0.3.1 retune

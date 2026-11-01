@@ -6,6 +6,20 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-01
+
+Fewer false tool-poisoning alarms. META-01 (tool poisoning) was flagging ordinary
+documentation in real MCP servers: tool descriptions that say "call this tool first",
+name a sibling tool, link to docs, or mention `~/.ssh` only to say such paths are
+rejected. 0.3.1 retunes those rules. On real tool descriptions from published MCP
+servers that were held out from the tuning, precision at medium or above rose from
+48.0% to 96.0% (false-positive rate 2.7% to 0.1%), and the share of server packages with at
+least one medium-or-above META-01 finding fell from 22.5% to 2.2% on the tuning set
+and from 25.6% to 2.6% on the held-out set. Recall on the project's poisoned texts is
+unchanged (77.4% at medium or above). Known-bad cases such as the demo's `run_command`
+and the 0.2.0 planted-instruction example are still High. Numbers and method:
+[docs/benchmark.md](docs/benchmark.md).
+
 ### Changed
 
 - META-01 rules 0.3.1 (`RULES_VERSION`): usage guidance ("always use this tool to", "you
@@ -255,4 +269,5 @@ First public release of the open-source scanner core.
 - Docker container GitHub Action, CI (ruff, strict mypy, pytest on Python
   3.11 to 3.13) and PyPI Trusted Publishing release workflow.
 
+[0.3.1]: https://github.com/mcpprobe-dev/mcpprobe/releases/tag/v0.3.1
 [0.1.0]: https://github.com/mcpprobe-dev/mcpprobe/releases/tag/v0.1.0
