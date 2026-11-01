@@ -331,10 +331,19 @@ def token_cmd(host: str) -> None:
     click.echo(f'  {record_name(host)}.  TXT  "{expected_txt_record(token)}"')
 
 
+def _add_registry_report() -> None:
+    from mcpprobe.registry.cli import registry_report
+
+    cli.add_command(registry_report)
+
+
+_add_registry_report()
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     """Entry point: default to the ``scan`` sub-command when the first argument is a target."""
     args = list(sys.argv[1:] if argv is None else argv)
-    known = {"scan", "checks", "token"}
+    known = {"scan", "checks", "token", "registry-report"}
     group_options = {"-h", "--help", "--version"}
     if args and args[0] not in known and args[0] not in group_options:
         args.insert(0, "scan")

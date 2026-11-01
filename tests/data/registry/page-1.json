@@ -1,0 +1,140 @@
+{
+  "servers": [
+    {
+      "server": {
+        "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+        "name": "org.example.demo/demo",
+        "description": "Fixture entry org.example.demo/demo",
+        "version": "1.0.0",
+        "remotes": [
+          {
+            "type": "streamable-http",
+            "url": "https://demo.example.org/mcp"
+          }
+        ]
+      },
+      "_meta": {
+        "io.modelcontextprotocol.registry/official": {
+          "status": "active",
+          "publishedAt": "2026-09-01T00:00:00Z",
+          "updatedAt": "2026-09-01T00:00:00Z",
+          "isLatest": true
+        }
+      }
+    },
+    {
+      "server": {
+        "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+        "name": "net.example.hardened/server",
+        "description": "Fixture entry net.example.hardened/server",
+        "version": "1.0.0",
+        "remotes": [
+          {
+            "type": "streamable-http",
+            "url": "https://hardened.example.net/mcp"
+          }
+        ]
+      },
+      "_meta": {
+        "io.modelcontextprotocol.registry/official": {
+          "status": "active",
+          "publishedAt": "2026-09-01T00:00:00Z",
+          "updatedAt": "2026-09-01T00:00:00Z",
+          "isLatest": true
+        }
+      }
+    },
+    {
+      "server": {
+        "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+        "name": "com.example.trifecta/agent",
+        "description": "Fixture entry com.example.trifecta/agent",
+        "version": "1.0.0",
+        "remotes": [
+          {
+            "type": "streamable-http",
+            "url": "https://trifecta.example.com/mcp"
+          }
+        ]
+      },
+      "_meta": {
+        "io.modelcontextprotocol.registry/official": {
+          "status": "active",
+          "publishedAt": "2026-09-01T00:00:00Z",
+          "updatedAt": "2026-09-01T00:00:00Z",
+          "isLatest": true
+        }
+      }
+    },
+    {
+      "server": {
+        "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+        "name": "io.example.site/html",
+        "description": "Fixture entry io.example.site/html",
+        "version": "1.0.0",
+        "remotes": [
+          {
+            "type": "streamable-http",
+            "url": "https://html.example.io/mcp"
+          }
+        ]
+      },
+      "_meta": {
+        "io.modelcontextprotocol.registry/official": {
+          "status": "active",
+          "publishedAt": "2026-09-01T00:00:00Z",
+          "updatedAt": "2026-09-01T00:00:00Z",
+          "isLatest": true
+        }
+      }
+    },
+    {
+      "server": {
+        "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+        "name": "dev.example.optout/server",
+        "description": "Fixture entry dev.example.optout/server",
+        "version": "1.0.0",
+        "remotes": [
+          {
+            "type": "streamable-http",
+            "url": "https://mcp.optout.example.dev/mcp"
+          }
+        ]
+      },
+      "_meta": {
+        "io.modelcontextprotocol.registry/official": {
+          "status": "active",
+          "publishedAt": "2026-09-01T00:00:00Z",
+          "updatedAt": "2026-09-01T00:00:00Z",
+          "isLatest": true
+        }
+      }
+    },
+    {
+      "server": {
+        "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+        "name": "io.github.fixture-user/private-ip",
+        "description": "Fixture entry io.github.fixture-user/private-ip",
+        "version": "1.0.0",
+        "remotes": [
+          {
+            "type": "streamable-http",
+            "url": "https://10.1.2.3/mcp"
+          }
+        ]
+      },
+      "_meta": {
+        "io.modelcontextprotocol.registry/official": {
+          "status": "active",
+          "publishedAt": "2026-09-01T00:00:00Z",
+          "updatedAt": "2026-09-01T00:00:00Z",
+          "isLatest": true
+        }
+      }
+    }
+  ],
+  "metadata": {
+    "nextCursor": "org.example.demo/demo-sse:1.0.0",
+    "count": 6
+  }
+}

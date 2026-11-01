@@ -6,6 +6,45 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- META-01 rules 0.3.1 (`RULES_VERSION`): usage guidance ("always use this tool to", "you
+  must call X first", "call this first when") is no longer an indicator on its own;
+  shadowing needs wording that changes what another tool does; dictionary-word tool names
+  count only when quoted; plain URLs and example.com addresses are not indicators; a
+  credential path is medium only after a read/send verb that is not negated; shadowing in
+  server instructions is low. On 3,762 real descriptions from 128 published MCP server
+  packages (`tests/data/meta01_real_benign.json`) the medium-or-above false-positive rate
+  fell from 2.8% to 0.1% (22.5% to 2.2% of packages); recall on the project's poisoned set
+  is unchanged at medium or above. See docs/benchmark.md.
+- Registry survey disclosure queue: an open server is descriptive. A host qualifies only
+  for META-05 secrets (P1), META-03 high/critical without authentication or AUTH-04 (P2),
+  META-01 high from current rules (P3) or META-07 without authentication (P4).
+
+### Added
+
+- `registry-report recheck` (re-run survey-profile checks on hosts with visible tools, or
+  `--from-queue`, under the same polite rules) and `registry-report reaggregate` (offline;
+  merges scan and recheck passes, re-runs static checks, prints before/after counts).
+- `disclosure-summary.json` (counts only), survey cross-tabs (capability and trifecta by
+  authentication, tool-count distribution, open servers with write/exec-capable tools) in
+  `aggregates.json` and the report; derived labels (`meta01_rules`, `meta01_indicators`,
+  `capabilities`) in `scan.jsonl`.
+
+- `mcpprobe registry-report fetch|scan|calibrate|aggregate|render` (also
+  `python -m mcpprobe.registry`): a resumable pipeline for an anonymised "State of MCP
+  server security" report over the official MCP Registry. It covers:
+  - paging the list API;
+  - remote and package-only selection;
+  - static META-01/06/07 on the tool definitions in registry entries;
+  - a passive survey-profile batch scan (opt-out first, 1 request/s per provider,
+    at most 8 hosts in parallel, public addresses only with pinned connections,
+    same origin only, stop on 429/403, no response bodies stored);
+  - aggregates with 95% Wilson intervals;
+  - a Markdown/SVG report that refuses to name third-party hosts.
+
+  See [docs/registry-report.md](docs/registry-report.md).
+
 ## [0.3.0]
 
 Directory readiness, the 2026-07-28 protocol rules, tool annotations and toxic flows.
