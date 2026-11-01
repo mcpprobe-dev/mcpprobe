@@ -18,7 +18,16 @@ from click.testing import CliRunner
 
 from mcpprobe import POLICY_URL
 from mcpprobe.cli import cli
-from mcpprobe.registry.aggregate import aggregate, disclosure_queue, parse_benchmark, wilson
+from mcpprobe.registry.aggregate import (
+    aggregate,
+    crosstabs,
+    disclosure_queue,
+    disclosure_summary,
+    merge_rechecks,
+    parse_benchmark,
+    public_disclosure_counts,
+    wilson,
+)
 from mcpprobe.registry.batch import (
     AddressRefused,
     BatchConfig,
@@ -39,10 +48,13 @@ from mcpprobe.registry.common import (
 )
 from mcpprobe.registry.fetch import FetchStoppedError, fetch_registry, normalise_item
 from mcpprobe.registry.pipeline import (
+    StageError,
     aggregate_stage,
     calibrate_stage,
     identifiers,
     merge_disclosures,
+    reaggregate_stage,
+    recheck_stage,
     render_stage,
     scan_stage,
 )
@@ -313,8 +325,13 @@ def test_checkpoint_holds_outcomes_not_bodies(pipeline):
         assert set(rec) <= {
             "host", "rate_key", "url", "transport", "entries", "needs_headers", "started_at", "finished_at",
             "status", "reason", "requests", "outcomes", "protocol_version", "flavour", "auth_required",
-            "edge", "inventory",
+            "edge", "inventory", "meta01_rules", "checks_run", "capabilities", "meta01_indicators",
         }  # fmt: skip
+        # Derived labels are fixed vocabularies, never text or names from the host.
+        assert all(c.islower() or "_" in c for c in rec.get("capabilities", []))
+    demo = pipeline["records"]["demo.example.org"]
+    assert demo["meta01_rules"] == "0.3.1" and "hidden_instruction" in demo["meta01_indicators"]
+    assert "arbitrary_command_execution" in demo["capabilities"]
 
 
 def test_pacing_is_one_request_per_second_per_rate_key(pipeline):
@@ -660,3 +677,267 @@ def test_late_exclusion_drops_host_from_aggregates(tmp_path, servers):
     agg, n = aggregate_stage(wd, benchmark=BENCHMARK)
     assert agg["funnel"]["host_statuses"]["scanned"] == 2 and n == 1
     assert agg["funnel"]["excluded"]["excluded_by_list"] == 2  # the streamable-http and SSE URLs
+
+
+# ----------------------------------------------------------------------------- disclosure criteria
+def _rec(
+    host: str, auth_required: bool = False, rules: str | None = "0.3.1", **outcomes: str
+) -> dict[str, Any]:
+    base = dict.fromkeys(SURVEY_CHECKS, "passed")
+    base["AUTH-01"] = "passed" if auth_required else "critical"
+    base.update({k.replace("_", "-"): v for k, v in outcomes.items()})
+    return {
+        "host": host,
+        "url": f"https://{host}/mcp",
+        "status": "scanned",
+        "auth_required": auth_required,
+        "outcomes": base,
+        "meta01_rules": rules,
+        "inventory": {"tools": 3},
+        "finished_at": "2026-11-01T00:00:00+00:00",
+    }
+
+
+DISCLOSURE_CASES = [
+    # (record, expected priority or None)
+    (_rec("open-only.example"), None),
+    (_rec("prm.example", True, AUTH_02="high"), None),
+    (_rec("headers.example", TRANS_05="high"), None),
+    (_rec("open-prm-headers.example", AUTH_02="high", TRANS_05="medium", META_06="medium"), None),
+    (_rec("secret.example", True, META_05="high"), "P1"),
+    (_rec("shell-open.example", META_03="critical"), "P2"),
+    (_rec("shell-auth.example", True, META_03="high"), None),
+    (_rec("jwt.example", True, AUTH_04="critical"), "P2"),
+    (_rec("poison.example", True, META_01="high"), "P3"),
+    (_rec("poison-old.example", rules=None, META_01="high"), None),
+    (_rec("poison-medium.example", META_01="medium"), None),
+    (_rec("trifecta-open.example", META_07="high"), "P4"),
+    (_rec("trifecta-auth.example", True, META_07="medium"), None),
+    (_rec("many.example", META_07="high", META_01="high", META_05="high"), "P1"),
+]
+
+
+@pytest.mark.parametrize(
+    ("record", "expected"), DISCLOSURE_CASES, ids=[c[0]["host"] for c in DISCLOSURE_CASES]
+)
+def test_disclosure_criteria(record, expected):
+    queue = disclosure_queue([record])
+    if expected is None:
+        assert queue == []
+    else:
+        [entry] = queue
+        assert entry["priority"] == expected
+        assert "AUTH-01" not in entry["checks"]  # descriptive context only, never a reason
+        assert all(not r.startswith("AUTH-01") for r in entry["reasons"])
+
+
+def test_disclosure_summary_counts_without_hosts():
+    records = [r for r, _ in DISCLOSURE_CASES]
+    queue = disclosure_queue(records)
+    summary = disclosure_summary(queue, records)
+    assert summary["by_priority"] == {"P1": 2, "P2": 2, "P3": 1, "P4": 1}
+    assert summary["hosts"] == 6
+    assert summary["meeting_criterion"] == {"P1": 2, "P2": 2, "P3": 2, "P4": 2}
+    assert summary["meta01_high_on_older_rules_pending_recheck"] == 1
+    # Open-only and other descriptive hosts had a high/critical outcome but do not qualify
+    # (the one remaining host, an authenticated server with a medium trifecta, had none).
+    assert summary["high_or_critical_but_not_qualifying"] == len(records) - 6 - 1
+    text = json.dumps(summary)
+    assert not [r["host"] for r in records if r["host"] in text]
+    public = public_disclosure_counts(summary)
+    assert public["by_priority"]["P3"] is None and public["by_priority"]["P1"] is None  # under MIN_CELL
+    assert public["hosts"] == 6
+
+
+def test_merge_disclosures_drops_untouched_legacy_entries():
+    legacy = [
+        {"host": "open-only.example", "checks": {"AUTH-01": "critical"}, "notified_at": None},
+        {"host": "notified.example", "checks": {"AUTH-01": "critical"}, "notified_at": "2026-11-02"},
+        {"host": "shell-open.example", "checks": {"AUTH-01": "critical"}, "notes": "contact found"},
+    ]
+    new = disclosure_queue([_rec("shell-open.example", META_03="critical")])
+    merged = {d["host"]: d for d in merge_disclosures(legacy, new)}
+    assert set(merged) == {"notified.example", "shell-open.example"}
+    assert merged["notified.example"]["priority"] is None  # kept only because the operator was contacted
+    assert merged["shell-open.example"]["priority"] == "P2"
+    assert merged["shell-open.example"]["notes"] == "contact found"
+
+
+def test_merge_rechecks_overlays_only_rechecked_checks():
+    old = _rec("a.example", rules=None, META_01="high", META_03="critical", TRANS_05="high")
+    blocked = {"host": "a.example", "status": "blocked", "outcomes": {}, "finished_at": "t3"}
+    ok = {
+        "host": "a.example",
+        "status": "scanned",
+        "checks_run": ["META-01", "META-03"],
+        "outcomes": {"META-01": "passed", "META-03": "critical"},
+        "auth_required": False,
+        "meta01_rules": "0.3.1",
+        "capabilities": ["arbitrary_command_execution", "exec"],
+        "finished_at": "t2",
+    }
+    [m] = merge_rechecks([old], [ok, blocked])
+    assert m["outcomes"]["META-01"] == "passed" and m["outcomes"]["TRANS-05"] == "high"
+    assert m["meta01_rules"] == "0.3.1" and m["recheck_status"] == "blocked"
+    assert m["capabilities"] == ["arbitrary_command_execution", "exec"]
+    # Now requires auth, observed by a recheck that did not re-run AUTH-01: no longer open.
+    [m2] = merge_rechecks([old], [{**ok, "auth_required": True}])
+    assert m2["open_observed"] is False and disclosure_queue([m2]) == []
+
+
+def test_crosstabs_split_by_auth_and_suppress_small_cells():
+    records = [_rec(f"o{i}.example", META_03="critical" if i < 4 else "low", META_07="high" if i < 2 else "passed")
+               for i in range(10)]  # fmt: skip
+    records += [_rec(f"a{i}.example", True, META_03="high" if i < 1 else "passed") for i in range(4)]
+    records[0]["capabilities"] = ["exec"]
+    records[1]["capabilities"] = ["network"]
+    ct = crosstabs(records)
+    dang = {m["id"]: m for m in ct["dangerous_capability_by_auth"]}
+    assert (
+        dang["dangerous_capability_open"]["numerator"],
+        dang["dangerous_capability_open"]["denominator"],
+    ) == (4, 10)
+    assert dang["dangerous_capability_auth"]["numerator"] is None  # 1 host: withheld
+    assert dang["dangerous_capability_auth"]["suppressed"]
+    toxic = {m["id"]: m for m in ct["toxic_flow_by_auth"]}
+    assert toxic["toxic_flow_open"]["numerator"] is None  # 2 hosts: withheld
+    cap = {m["id"]: m for m in ct["open_capability"]}
+    assert cap["open_write_exec"]["denominator"] == 2 and cap["open_write_exec"]["numerator"] is None
+    assert cap["open_high_impact"]["numerator"] == 10
+    assert ct["tool_count_distribution"]["buckets"]["2-5"] == 10
+
+
+def test_meta01_rates_exclude_outcomes_from_older_rules():
+    records = [_rec(f"n{i}.example", META_01="medium") for i in range(3)]
+    records += [_rec(f"s{i}.example", rules=None, META_01="high") for i in range(5)]
+    agg = aggregate(records, [])
+    m = {x["id"]: x for x in agg["metrics"]}
+    assert (m["poisoning_any"]["numerator"], m["poisoning_any"]["denominator"]) == (3, 3)
+    assert m["poisoning_high"]["numerator"] == 0
+    assert agg["meta01_rules"]["hosts_by_rules"]["current"] == 3
+
+
+# ----------------------------------------------------------------------------- recheck / reaggregate
+@pytest.fixture()
+def scanned_wd(tmp_path, servers):
+    wd = WorkDir(tmp_path)
+    asyncio.run(fetch_registry(wd, httpx_transport=registry_transport([]), sleep=no_sleep))
+    asyncio.run(scan_stage(wd, cfg=batch_config(servers, VirtualClock())))
+    # Pretend the scan ran with the 0.3.0 rules: META-01 outcomes carry no rules revision.
+    rows = []
+    for r in read_jsonl(wd.scan):
+        r.pop("meta01_rules", None)
+        rows.append(r)
+    write_jsonl(wd.scan, rows)
+    return wd
+
+
+def test_reaggregate_is_offline_and_reports_stale_meta01(scanned_wd, servers):
+    for srv in servers.values():
+        srv.requests.clear()
+    out = asyncio.run(reaggregate_stage(scanned_wd, benchmark=BENCHMARK))
+    assert all(not srv.requests for srv in servers.values())  # nothing sent
+    assert out["metrics"]["poisoning_any"]["after"] == "0/0"
+    assert out["by_priority"] == {"P1": 0, "P2": 1, "P3": 0, "P4": 1}
+    assert out["meta01_high_on_older_rules_pending_recheck"] == 0  # demo is already queued (P2)
+    assert out["static_records"] == 10
+    summary = json.loads(scanned_wd.disclosure_summary.read_text())
+    assert "demo.example.org" not in json.dumps(summary)
+    assert not scanned_wd.disclosure_summary.name.startswith("PRIVATE")
+
+
+def test_recheck_from_queue_contacts_only_queued_hosts(scanned_wd, servers):
+    reaggregate_stage_sync = asyncio.run
+    reaggregate_stage_sync(reaggregate_stage(scanned_wd, benchmark=BENCHMARK))
+    for srv in servers.values():
+        srv.requests.clear()
+    clock = VirtualClock()
+    pacer = HostPacer(clock=clock, sleep=clock.sleep)
+    res = asyncio.run(
+        recheck_stage(
+            scanned_wd,
+            from_queue=True,
+            checks=["META-01", "META-07", "META-03"],
+            cfg=batch_config(servers, clock),
+            pacer=pacer,
+        )
+    )
+    assert res.hosts == 2 and res.batch.scanned_now == 2
+    contacted = {h for h, srv in servers.items() if srv.requests}
+    assert contacted == {"demo.example.org", "trifecta.example.com"}
+    for srv in servers.values():
+        assert all("mcpprobe" in req["headers"].get("user-agent", "") for req in srv.requests)
+        assert not any(
+            req.get("json", {}).get("method") == "tools/call" for req in srv.requests if req.get("json")
+        )
+    times: dict[str, list[float]] = {}
+    for key, t in pacer.log:
+        times.setdefault(key, []).append(t)
+    for ts in times.values():
+        assert all(b - a >= 1.0 for a, b in zip(ts, ts[1:], strict=False))
+    recs = {r["host"]: r for r in read_jsonl(scanned_wd.recheck)}
+    assert set(recs["demo.example.org"]["outcomes"]) == {"META-01", "META-07", "META-03"}
+    assert recs["demo.example.org"]["meta01_rules"] == "0.3.1"
+    out = asyncio.run(reaggregate_stage(scanned_wd, benchmark=BENCHMARK))
+    assert out["metrics"]["poisoning_high"]["after"] == "1/2"
+    # demo's run_command, rechecked with the 0.3.1 rules, is a P3 reason (demo stays P2 overall).
+    summary = json.loads(scanned_wd.disclosure_summary.read_text())
+    assert summary["by_reason"]["META-01 high"] == 1 and out["by_priority"]["P2"] == 1
+    # Resume: a second run sends nothing; --new-pass archives and runs again.
+    again = asyncio.run(recheck_stage(scanned_wd, from_queue=True, cfg=batch_config(servers, VirtualClock())))
+    assert again.batch.scanned_now == 0
+    fresh = asyncio.run(
+        recheck_stage(scanned_wd, from_queue=True, new_pass=True, cfg=batch_config(servers, VirtualClock()))
+    )
+    assert fresh.batch.scanned_now == 2 and len(scanned_wd.recheck_files()) == 2
+
+
+def test_recheck_selects_hosts_with_visible_tools_and_respects_refusals(scanned_wd, servers):
+    rows = list(read_jsonl(scanned_wd.scan))
+    for r in rows:
+        if r["host"] == "trifecta.example.com":
+            # A different host on the same provider refused us in the original scan.
+            rows.append({**r, "host": "x.example.com", "status": "blocked", "outcomes": {}})
+    write_jsonl(scanned_wd.scan, rows)
+    dry = asyncio.run(recheck_stage(scanned_wd, dry_run=True, cfg=batch_config(servers, VirtualClock())))
+    assert dry.hosts == 2 and dry.batch.plan["hosts"] == 2 and not scanned_wd.recheck.exists()
+    for srv in servers.values():
+        srv.requests.clear()
+    res = asyncio.run(recheck_stage(scanned_wd, cfg=batch_config(servers, VirtualClock())))
+    recs = {r["host"]: r for r in read_jsonl(scanned_wd.recheck)}
+    assert recs["trifecta.example.com"]["status"] == "blocked"
+    assert not servers["trifecta.example.com"].requests
+    assert recs["demo.example.org"]["status"] == "scanned"
+    assert res.batch.scanned_now == 2
+    with pytest.raises(StageError, match="not survey-profile"):
+        asyncio.run(recheck_stage(scanned_wd, checks=["AUTH-04"]))
+
+
+def test_cli_recheck_and_reaggregate(scanned_wd):
+    runner = CliRunner()
+    wd = str(scanned_wd.root)
+    result = runner.invoke(cli, ["registry-report", "reaggregate", "--workdir", wd, "--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["written"] is False
+    result = runner.invoke(cli, ["registry-report", "recheck", "--workdir", wd, "--from-queue", "--dry-run"])
+    assert result.exit_code == 1 and "run 'registry-report reaggregate' first" in result.output
+    runner.invoke(cli, ["registry-report", "reaggregate", "--workdir", wd])
+    result = runner.invoke(
+        cli,
+        [
+            "registry-report",
+            "recheck",
+            "--workdir",
+            wd,
+            "--from-queue",
+            "--dry-run",
+            "--checks",
+            "META-01,META-07",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    out = json.loads(result.output)
+    assert (
+        out["selected_hosts"] == 2 and out["checks"] == ["META-01", "META-07"] and out["rechecked_now"] == 0
+    )
+    assert not (scanned_wd.recheck).exists()

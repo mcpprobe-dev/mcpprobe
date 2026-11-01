@@ -1,15 +1,18 @@
 # "State of MCP server security" report: how to run it
 
 `mcpprobe registry-report` (also `python -m mcpprobe.registry`) builds an anonymised
-report on the remote MCP servers listed in the official MCP Registry. It has five stages.
-Each stage reads and writes one working directory, and each can be resumed:
+report on the remote MCP servers listed in the official MCP Registry. It has five stages,
+plus two for refreshing results after a scanner update. Each stage reads and writes one
+working directory, and each can be resumed:
 
 | Stage | Network | Writes |
 |---|---|---|
 | `fetch` | registry API only, 1 request/s | `registry/page-*.json`, `fetch-state.json`, `entries.jsonl` |
 | `scan` | the listed remote hosts (survey profile, below) | `targets.jsonl`, `selection.json`, `static.jsonl`, `scan.jsonl` |
 | `calibrate` | none (local fixtures on 127.0.0.1; needs a repository checkout) | `calibration.json` |
-| `aggregate` | none | `aggregates.json`, `PRIVATE-disclosure-queue.json` |
+| `aggregate` | none | `aggregates.json`, `PRIVATE-disclosure-queue.json`, `disclosure-summary.json` |
+| `recheck` | selected hosts only (survey profile, same rules) | `recheck.jsonl` (`recheck-<time>.jsonl` for earlier passes) |
+| `reaggregate` | none | `static.jsonl` (re-run offline), then what `aggregate` writes; prints before/after counts |
 | `render` | none | `report/report.md`, `report/chart-*.svg` |
 
 Every stage takes `--dry-run`, which sends nothing and writes nothing.
@@ -50,7 +53,12 @@ These rules are in code, not in this document only. The tests in
 - **No bodies stored.** Evidence exists only in memory during one host's scan.
   `scan.jsonl` keeps, per host: status, the outcome of each check
   (`passed` / severity / `n_a` / `blocked` / `unreachable` / `not_mcp` / `error`), request
-  count, negotiated revision, negotiation style, edge label and list counts.
+  count, negotiated revision, negotiation style, edge label and list counts. From 0.3.1 it
+  also keeps derived labels from fixed vocabularies: the META-01 rules revision
+  (`meta01_rules`), the META-01 indicator kinds at medium or above (`meta01_indicators`),
+  the META-03 capability classes (`capabilities`) and the checks run (`checks_run`). It
+  never keeps a tool name, description or any other text from the host, so a rule change
+  cannot be re-evaluated offline for remote hosts: use `recheck`.
 - **Identification.** Every request carries
   `User-Agent: mcpprobe/<version> (+https://mcpprobe.tech/scanning-policy)`.
 
@@ -182,6 +190,39 @@ aws s3 cp --recursive $W/report s3://$BUCKET/report/
 aws s3 cp $W/PRIVATE-disclosure-queue.json s3://$BUCKET/private/
 ```
 
+### After a scanner update: recheck and reaggregate
+
+`scan.jsonl` keeps outcomes, not tool descriptions, so improved META-01 rules cannot be
+applied to stored results. Two stages refresh them:
+
+- `reaggregate` (offline) re-runs the static checks on the tool definitions stored in
+  `entries.jsonl`, merges `scan.jsonl` with every recheck pass, rebuilds `aggregates.json`,
+  the PRIVATE queue and `disclosure-summary.json`, and prints each metric before and after.
+  META-01 rates count only hosts whose META-01 outcome came from the current rules
+  (`meta01_rules`); older outcomes are reported as stale and left out.
+- `recheck` re-runs survey-profile checks (default `META-01,META-03,META-05,META-07`) on
+  every scanned host whose tool list was visible, or with `--from-queue` only on hosts in
+  the PRIVATE queue. Every scan rule applies: opt-out first, the same User-Agent, 1
+  request/s per provider, at most 8 hosts, public pinned addresses, same origin, and stop on
+  429/403. A provider that refused us in the scan or in an earlier recheck is not contacted.
+  Re-running resumes; `--new-pass` archives the current pass and checks every selected
+  host again. `--dry-run` prints the plan and runtime estimate.
+
+```bash
+python -m mcpprobe.registry reaggregate -w $W                      # offline; queue without stale META-01
+python -m mcpprobe.registry recheck     -w $W --exclude-file ~/exclusions.txt --dry-run
+python -m mcpprobe.registry recheck     -w $W --exclude-file ~/exclusions.txt 2>&1 | tee -a $W/recheck.log
+python -m mcpprobe.registry reaggregate -w $W
+python -m mcpprobe.registry render      -w $W
+# later, to refresh only the queue:
+python -m mcpprobe.registry recheck     -w $W --from-queue --new-pass --exclude-file ~/exclusions.txt
+```
+
+A recheck costs about the same per host as the scan (opt-out document, negotiation, the
+three list methods; budget 10 requests, 10 s per host). For ~11,750 hosts with visible tool
+lists that is at least 11,750 x 10 s / 8 = about 4.1 hours, or the largest provider group
+x 10 s if that is longer; `recheck --dry-run` prints the exact figure for your data.
+
 ### 4. Tear down
 
 ```bash
@@ -243,9 +284,23 @@ The total is about $1. Keeping the Elastic IP between surveys costs about $3.60 
 
 ## Responsible disclosure
 
-`aggregate` writes `PRIVATE-disclosure-queue.json`, which lists every host with a high or
-critical outcome. Re-running `aggregate` keeps the fields you fill in by hand:
-`notified_at`, `fixed_at`, `may_name`, `contact` and `notes`.
+`aggregate` writes `PRIVATE-disclosure-queue.json`. In the survey an open server is a
+description, not a vulnerability, so AUTH-01, AUTH-02 and TRANS-05 never qualify a host on
+their own. A host is queued only for:
+
+| Priority | Criterion |
+|---|---|
+| P1 | secrets in tool metadata (META-05 high/critical) |
+| P2 | command execution or file access on an open server (META-03 high/critical, no authentication), or a token-validation bypass (AUTH-04 high/critical, not in the survey profile) |
+| P3 | tool poisoning at high (META-01 high from the current rules) |
+| P4 | lethal trifecta on an open server (META-07, no authentication) |
+
+Each entry has `priority` (the highest that applies), `priorities`, `reasons`, the
+qualifying `checks` and other findings as `context`. `disclosure-summary.json` holds the
+counts per priority and per reason, with no host, and may be shared. Re-running
+`aggregate` keeps the fields you fill in by hand: `notified_at`, `fixed_at`, `may_name`,
+`contact` and `notes`. An entry that no longer qualifies is dropped, unless one of those
+fields is set; it then stays with `priority: null` until you close it.
 
 1. **Confirm first.** Check each queued host by hand with the same passive requests, for
    example `mcpprobe <url> --only AUTH-01 --only META-01 -v`. Do not run active checks

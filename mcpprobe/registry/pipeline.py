@@ -11,12 +11,23 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from mcpprobe.registry.aggregate import aggregate, default_benchmark_path, disclosure_queue
+from mcpprobe.models import utcnow
+from mcpprobe.registry.aggregate import (
+    aggregate,
+    default_benchmark_path,
+    disclosure_queue,
+    disclosure_summary,
+    merge_rechecks,
+)
 from mcpprobe.registry.batch import BatchConfig, BatchResult, GuardState, HostPacer, run_batch
 from mcpprobe.registry.common import (
+    RECHECK_CHECKS,
+    SURVEY_CHECKS,
     HostStatus,
     WorkDir,
+    is_assessed,
     is_finding,
+    rate_key,
     read_json,
     read_jsonl,
     write_json,
@@ -71,29 +82,49 @@ async def scan_stage(
 
 
 def merge_disclosures(old: list[dict[str, Any]], new: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Keep the operator-maintained fields (notified_at, fixed_at, may_name, notes) across re-aggregation."""
+    """Keep the operator-maintained fields (notified_at, fixed_at, may_name, notes) across re-aggregation.
+
+    A host that no longer qualifies (re-scanned clean, or outside the current criteria) stays
+    on the list only if the operator already acted on it (notified, fixed, contact or notes
+    recorded); it is then kept with ``priority: null`` so it is closed by hand. Untouched
+    entries that no longer qualify are dropped.
+    """
     keep = ("notified_at", "fixed_at", "may_name", "contact", "notes")
     previous = {d.get("host"): d for d in old}
     merged = []
     for d in new:
         p = previous.pop(d["host"], {})
         merged.append({**d, **{k: p[k] for k in keep if p.get(k) is not None}})
-    # Hosts no longer in the scan (e.g. re-scanned clean) stay on the list until closed by hand.
-    merged.extend(previous.values())
+    for d in previous.values():
+        if any(d.get(k) is not None for k in keep):
+            merged.append(
+                {**d, "priority": None, "reasons": ["no longer qualifies under the current criteria"]}
+            )
     return merged
 
 
-def aggregate_stage(
-    wd: WorkDir, *, benchmark: Path | None = None, dry_run: bool = False
-) -> tuple[dict[str, Any], int]:
+def survey_records(wd: WorkDir) -> list[dict[str, Any]]:
+    """scan.jsonl overlaid with recheck.jsonl, restricted to hosts still selected."""
     if not wd.scan.exists():
         raise StageError(f"{wd.scan} not found: run 'registry-report scan' first")
-    records = list(read_jsonl(wd.scan))
+    rechecks = [rec for path in wd.recheck_files() for rec in read_jsonl(path)]
+    records = merge_rechecks(read_jsonl(wd.scan), rechecks)
     if wd.targets.exists():
         # Only hosts still selected: a host added to the exclusion file after it was scanned
         # (an operator who asked to be left out) drops out of the aggregates on the next scan run.
         selected = {str(t.get("host")) for t in read_jsonl(wd.targets)}
         records = [r for r in records if str(r.get("host")) in selected]
+    return records
+
+
+def aggregate_stage(
+    wd: WorkDir, *, benchmark: Path | None = None, dry_run: bool = False
+) -> tuple[dict[str, Any], int]:
+    records = survey_records(wd)
+    queue = disclosure_queue(records)
+    old = read_json(wd.disclosure_queue) if wd.disclosure_queue.exists() else []
+    merged_queue = merge_disclosures(old, queue)
+    summary = disclosure_summary(merged_queue, records)
     bench_path = benchmark or default_benchmark_path()
     agg = aggregate(
         records,
@@ -101,13 +132,142 @@ def aggregate_stage(
         read_json(wd.selection) if wd.selection.exists() else None,
         benchmark_text=bench_path.read_text(encoding="utf-8") if bench_path.exists() else None,
         calibration=read_json(wd.calibration) if wd.calibration.exists() else None,
+        disclosure=summary,
     )
-    queue = disclosure_queue(records)
     if not dry_run:
         write_json(wd.aggregates, agg)
-        old = read_json(wd.disclosure_queue) if wd.disclosure_queue.exists() else []
-        write_json(wd.disclosure_queue, merge_disclosures(old, queue))
+        write_json(wd.disclosure_queue, merged_queue)
+        write_json(wd.disclosure_summary, summary)
     return agg, len(queue)
+
+
+def _metric_counts(agg: dict[str, Any] | None) -> dict[str, str]:
+    if not agg:
+        return {}
+    return {m["id"]: f"{m['numerator']}/{m['denominator']}" for m in agg.get("metrics") or []}
+
+
+async def reaggregate_stage(
+    wd: WorkDir, *, benchmark: Path | None = None, dry_run: bool = False
+) -> dict[str, Any]:
+    """Re-run the offline static checks, then aggregate scan + recheck outcomes; report what changed.
+
+    Nothing is sent to any host. The survey checkpoint keeps no tool descriptions, so META-01
+    on remote hosts cannot be re-evaluated offline: those outcomes are only refreshed by
+    ``recheck``. Registry entries do keep their publisher-provided tool definitions in
+    entries.jsonl, so the static checks are re-run here with the current rules.
+    """
+    before = read_json(wd.aggregates) if wd.aggregates.exists() else None
+    before_summary = read_json(wd.disclosure_summary) if wd.disclosure_summary.exists() else None
+    before_queue = read_json(wd.disclosure_queue) if wd.disclosure_queue.exists() else []
+    static_records = await run_static(_entries(wd)) if wd.entries.exists() else None
+    if static_records is not None and not dry_run:
+        write_jsonl(wd.static, static_records)
+    agg, n_queue = aggregate_stage(wd, benchmark=benchmark, dry_run=dry_run)
+    summary = disclosure_summary(
+        merge_disclosures(before_queue, disclosure_queue(survey_records(wd))), survey_records(wd)
+    )
+    old_counts, new_counts = _metric_counts(before), _metric_counts(agg)
+    return {
+        "metrics": {k: {"before": old_counts.get(k), "after": v} for k, v in new_counts.items()},
+        "queue_hosts": {
+            "before": len([d for d in before_queue if d.get("priority", "legacy")]),
+            "after": n_queue,
+        },
+        "by_priority": summary["by_priority"],
+        "by_priority_before": (before_summary or {}).get("by_priority"),
+        "meta01_hosts_by_rules": agg.get("meta01_rules", {}).get("hosts_by_rules"),
+        "meta01_high_on_older_rules_pending_recheck": summary["meta01_high_on_older_rules_pending_recheck"],
+        "static_records": len(static_records) if static_records is not None else None,
+        "rechecked_hosts": len({str(r.get("host")) for p in wd.recheck_files() for r in read_jsonl(p)}),
+        "written": not dry_run,
+    }
+
+
+def recheck_targets(
+    wd: WorkDir, *, from_queue: bool, checks: Iterable[str], exclusions: Exclusions | None = None
+) -> list[dict[str, Any]]:
+    """Hosts to re-run: the current disclosure queue, or every host whose tool list was visible."""
+    if not wd.targets.exists():
+        raise StageError(f"{wd.targets} not found: run 'registry-report scan' first")
+    records = {str(r["host"]): r for r in survey_records(wd)}
+    if from_queue:
+        if not wd.disclosure_queue.exists():
+            raise StageError(f"{wd.disclosure_queue} not found: run 'registry-report reaggregate' first")
+        wanted = {str(d["host"]) for d in read_json(wd.disclosure_queue) if d.get("priority")}
+    else:
+        checks = list(checks)
+        wanted = {
+            h
+            for h, r in records.items()
+            if r.get("status") == HostStatus.SCANNED.value
+            and any(is_assessed((r.get("outcomes") or {}).get(c)) for c in checks)
+        }
+    excl = exclusions or Exclusions()
+    return [
+        t
+        for t in read_jsonl(wd.targets)
+        if str(t.get("host")) in wanted and str(t.get("host")) in records and not excl.matches(str(t["host"]))
+    ]
+
+
+@dataclass(slots=True)
+class RecheckResult:
+    hosts: int
+    batch: BatchResult
+    checks: list[str]
+    notes: list[str] = field(default_factory=list)
+
+
+async def recheck_stage(
+    wd: WorkDir,
+    *,
+    from_queue: bool = False,
+    checks: Iterable[str] = RECHECK_CHECKS,
+    exclusions_file: Path | None = None,
+    cfg: BatchConfig | None = None,
+    limit: int | None = None,
+    dry_run: bool = False,
+    new_pass: bool = False,
+    pacer: HostPacer | None = None,
+    state: GuardState | None = None,
+) -> RecheckResult:
+    """Re-run survey-profile checks on selected hosts with the current scanner (recheck.jsonl).
+
+    Same guarantees as ``scan`` (opt-out first, 1 request/s per provider, at most 8 hosts,
+    public pinned addresses, same origin, stop on 429/403, no bodies kept). A provider that
+    refused us in the original scan or in an earlier recheck is not contacted again.
+    """
+    checks = [c.upper() for c in checks]
+    unknown = sorted(set(checks) - set(SURVEY_CHECKS))
+    if unknown:
+        raise StageError(
+            f"not survey-profile checks: {', '.join(unknown)} (allowed: {', '.join(SURVEY_CHECKS)})"
+        )
+    targets = recheck_targets(
+        wd, from_queue=from_queue, checks=checks, exclusions=Exclusions.load(exclusions_file)
+    )
+    base = cfg or BatchConfig()
+    base.checks = tuple(checks)
+    state = state or GuardState()
+    for rec in read_jsonl(wd.scan):
+        if rec.get("status") == HostStatus.BLOCKED.value:
+            state.stopped.setdefault(rate_key(str(rec.get("host"))), "a refusal in the original scan")
+    # Hosts already in the current pass are skipped (resume). --new-pass archives the
+    # current pass so every selected host is checked again; archived results still count.
+    notes: list[str] = []
+    for path in wd.recheck_files()[:-1] if wd.recheck.exists() else wd.recheck_files():
+        for rec in read_jsonl(path):
+            if rec.get("status") == HostStatus.BLOCKED.value:
+                state.stopped.setdefault(str(rec.get("rate_key")), "a refusal in an earlier recheck")
+    if new_pass and wd.recheck.exists() and not dry_run:
+        archived = wd.root / f"recheck-{utcnow().strftime('%Y%m%dT%H%M%SZ')}.jsonl"
+        wd.recheck.rename(archived)
+        notes.append(f"archived the previous pass as {archived.name}")
+    batch = await run_batch(targets, wd.recheck, base, limit=limit, dry_run=dry_run, pacer=pacer, state=state)
+    if dry_run:
+        notes.append("dry run: nothing written or sent")
+    return RecheckResult(hosts=len(targets), batch=batch, checks=checks, notes=notes)
 
 
 def identifiers(wd: WorkDir) -> set[str]:

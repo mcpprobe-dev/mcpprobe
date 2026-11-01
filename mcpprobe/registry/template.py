@@ -18,6 +18,8 @@ aggregate. No server, host or publisher is named, except servers that are ours.
 
 {{headline_table}}
 
+{{poisoning_rules_note}}
+
 The 95% intervals are Wilson score intervals. They treat the scanned hosts as a sample
 of remote MCP endpoints in general. The registry is not a random sample of all MCP
 servers (see Limitations), so read the intervals as a measure of sampling noise only,
@@ -67,6 +69,22 @@ META-01, META-06 and META-07 ran on any full tool definitions the publisher incl
 the registry entry. Entries without them are counted as not assessable.
 
 {{static_table}}
+
+## Authentication and capability together
+
+An open server (one that answers without credentials) is a description, not a
+vulnerability: many servers are public by design. What matters is what an open server
+lets anyone do. The rows below split the capability findings by whether the server
+required authentication. Tool lists are only visible on servers that answered
+`tools/list` without credentials, so the "requires auth" rows cover the few servers that
+require authentication for some requests but not for listing tools. Cells under
+{{min_cell}} hosts are withheld.
+
+{{crosstab_table}}
+
+How many tools open servers advertise:
+
+{{tool_count_table}}
 
 ## Protocol revisions, negotiation style and edge providers
 
@@ -135,8 +153,13 @@ evidence of security.
 
 ## Disclosure policy
 
-Findings at high or critical severity were reported privately to the operator before
-publication. The order of contact was: the operator's `security.txt` or `security@`
+An open server, missing RFC 9728 metadata or missing security headers were not reported
+on their own: they describe a configuration, not a vulnerability. A server was reported
+privately to its operator before publication when it met one of these criteria:
+
+{{disclosure_section}}
+
+The order of contact was: the operator's `security.txt` or `security@`
 address, then the contact listed in the registry entry or its repository, then the
 registry maintainers when no operator contact could be found. Operators had 90 days to
 respond and fix. This report never names a server whose finding is unfixed. Specifics

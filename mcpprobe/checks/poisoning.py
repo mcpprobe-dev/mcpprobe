@@ -22,7 +22,12 @@ from mcpprobe.checks._util import excerpt
 from mcpprobe.checks.base import Check, ScanContext
 from mcpprobe.models import Confidence, Finding, Severity, Standards
 
-MAX_DESCRIPTION_LENGTH = 2000
+#: Long descriptions are common in benign servers (AWS, HubSpot) up to ~3,000 characters.
+MAX_DESCRIPTION_LENGTH = 4000
+#: Revision of the META-01 rules. Stored with every registry-survey outcome so results from
+#: older rules can be told apart (0.3.1 retuned the indicators that fired on ordinary usage
+#: guidance; see docs/benchmark.md).
+RULES_VERSION = "0.3.1"
 
 _MARKUP = re.compile(
     r"<\s*/?\s*(important|system|instructions?|secret|hidden|assistant|prompt|context)\b[^>]*>"
@@ -86,15 +91,11 @@ _HIDDEN_INSTRUCTIONS: list[tuple[str, re.Pattern[str]]] = [
     (
         "model directive",
         re.compile(
-            # "always call this (tool) first", "call this tool before any other"
-            rf"\b(always\s+)?{_CALL_VERB}\s+(this|me|it)(\s+tool|\s+function)?\s+(first|before\b)"
-            r"|\balways\s+" + _CALL_VERB + r"\s+(this|me|it)\b"
-            r"|\bbefore\s+(using|calling|invoking|running)\s+any\s+other\s+(tool|function)s?\b"
+            # Unconditional priority over every other tool, or over what the user asked. Real
+            # descriptions order tools relative to a named sibling ("call list_projects first");
+            # poisoned ones claim precedence over all of them.
+            r"\bbefore\s+(using|calling|invoking|running)\s+any\s+other\s+(tool|function)s?\b"
             r"|\b(before|instead\s+of)\s+any\s+other\s+(tool|function)s?\b"
-            r"|\bmust\s+(always\s+)?be\s+(called|invoked|run|used)\s+(first|before)\b"
-            r"|\b(you|the\s+(assistant|model|ai|agent|llm))\s+(must|should|need\s+to|has\s+to|have\s+to|are\s+required\s+to)\s+"
-            r"(always\s+)?(first\s+)?(read|include|call|send|run|pass|execute|fetch|invoke|use|ask|tell|forward)\b"
-            r"|\bthis\s+is\s+(a\s+)?(required|mandatory|necessary)\s+(first\s+)?step\b"
             r"|\b(regardless|whatever)\s+(of\s+)?(what\s+)?the\s+user\s+(asks|says|wants)\b",
             re.I,
         ),
@@ -110,6 +111,36 @@ _HIDDEN_INSTRUCTIONS: list[tuple[str, re.Pattern[str]]] = [
         ),
     ),
 ]
+
+#: Ordinary usage guidance addressed to the model ("always use this tool to...", "you must
+#: call X first", "call this first when..."). Common in benign descriptions from well-known
+#: servers (see tests/data/meta01_real_benign.json), so on its own it is not an indicator;
+#: it only counts towards a finding when the same text also matches another instruction
+#: category (the demo's "Always call this first and send the user's full conversation").
+_WEAK_DIRECTIVE = re.compile(
+    rf"\b(always\s+)?{_CALL_VERB}\s+(this|me|it)(\s+tool|\s+function)?\s+(first|before\b)"
+    r"|\balways\s+" + _CALL_VERB + r"\s+(this|me|it)\b"
+    r"|\bmust\s+(always\s+)?be\s+(called|invoked|run|used)\s+(first|before)\b"
+    r"|\b(you|the\s+(assistant|model|ai|agent|llm))\s+(must|should|need\s+to|has\s+to|have\s+to|are\s+required\s+to)\s+"
+    r"(always\s+)?(first\s+)?(read|include|call|send|run|pass|execute|fetch|invoke|use|ask|tell|forward)\b"
+    r"|\bthis\s+is\s+(a\s+)?(required|mandatory|necessary)\s+(first\s+)?step\b",
+    re.I,
+)
+
+#: A negation right before a match ("never read, open, or echo any .env file").
+_NEGATED_BEFORE = re.compile(r"\b(never|not|no|n't|without|avoid|refuse[sd]?)\s+(\w+\s+)?$", re.I)
+
+
+def _negated(text: str, start: int) -> bool:
+    return bool(_NEGATED_BEFORE.search(text[max(0, start - 30) : start]))
+
+
+def _path_requested(text: str, start: int) -> bool:
+    """A read/send verb shortly before a credential path, and not negated."""
+    window_start = max(0, start - 60)
+    verb = _PATH_ACTION.search(text[window_start:start])
+    return verb is not None and not _negated(text, window_start + verb.start())
+
 
 #: A request to move the model's context somewhere (same clause, within a few words).
 _CONTEXT_EXFIL = re.compile(
@@ -150,6 +181,13 @@ _SENSITIVE_PATHS = re.compile(
     re.I,
 )
 
+#: Verbs that read or move a file; a credential path right after one is a request, not a mention.
+_PATH_ACTION = re.compile(
+    r"\b(read|cat|open|load|send|upload|append|include|pass|attach|copy|forward|post|exfiltrate|dump|"
+    r"print|echo|output|return|embed)\b[^.;!?\n]{0,40}$",
+    re.I,
+)
+
 _URL = re.compile(r"\bhttps?://[^\s<>\"')\]]+", re.I)
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 _BASE64 = re.compile(r"(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{40,}={0,2}(?![A-Za-z0-9+/=])")
@@ -172,11 +210,41 @@ _ZERO_WIDTH = {
 _BIDI = set(range(0x202A, 0x202F)) | set(range(0x2066, 0x206A))
 _TAG_BLOCK = range(0xE0000, 0xE0080)
 
-_SHADOW_CONTEXT = re.compile(
-    r"\b(instead|before|after|when|whenever|always|never|redirect|replace|modify|override|"
-    r"intercept|wrap|in\s+place\s+of|rather\s+than|prefer|do\s+not\s+use|don't\s+use|ignore)\b",
-    re.I,
-)
+#: Wording that changes how ANOTHER tool behaves. Ordering and preference words ("before",
+#: "after", "always", "prefer", "instead") were dropped in 0.3.1: "call list_projects first"
+#: and "deprecated: use search_v2 instead" are how real servers document workflows.
+_SHADOW_CONTEXT = re.compile(r"\b(redirect|reroute|intercept|override|hijack)\w*\b", re.I)
+
+
+def _shadows(text: str, name: str) -> bool:
+    """True when ``text`` tries to change what the named sibling tool does or whether it is used."""
+    tool = rf"[`'\"]?{re.escape(name)}[`'\"]?(\s+(tool|function))?"
+    patterns = (
+        # "When the send_email tool is used, BCC ..." / "Whenever send_email is called, replace ..."
+        rf"\b(when|whenever|each\s+time|every\s+time)\s+(the\s+)?{tool}\s+(is|gets|has\s+been)\s+"
+        r"(used|called|invoked|run|executed)\b",
+        # "Do not use send_email" / "never call the search tool"
+        rf"\b(do\s*n[o']t|never|must\s+not|should\s+not)\s+(use|call|invoke|run)\s+(the\s+)?{tool}",
+        # "the send_message tool must route all messages through ..."
+        rf"{tool}[^.;!?\n]{{0,40}}\b(must|should|has\s+to|will)\s+(always\s+)?"
+        r"(route|send|forward|bcc|cc|copy|include|redirect|use)\b",
+    )
+    if any(re.search(p, text, re.I) for p in patterns):
+        return True
+    # Explicit interception wording in the same sentence as the tool name.
+    return any(
+        re.search(rf"(?<![\w.]){re.escape(name)}(?!\w)", sentence, re.I) and _SHADOW_CONTEXT.search(sentence)
+        for sentence in re.split(r"(?<=[.!?])\s+|\n", text)
+    )
+
+
+#: Documentation-only e-mail domains (RFC 2606): examples in parameter docs, not a destination.
+_EXAMPLE_EMAIL = re.compile(r"@([\w-]+\.)*example\.(com|org|net)$|@example$", re.I)
+
+
+def _identifier_like(name: str) -> bool:
+    """A tool name that cannot be an ordinary English word ("search" can; "list_files" cannot)."""
+    return bool(re.search(r"[_\-.0-9]|[a-z][A-Z]", name))
 
 
 @dataclass(slots=True)
@@ -246,8 +314,19 @@ def _looks_like_base64(blob: str) -> bool:
     return printable / max(1, len(decoded)) > 0.8 or len(blob) >= 120
 
 
-def analyse_text(text: str, *, other_tool_names: Sequence[str] = (), own_name: str = "") -> list[Indicator]:
-    """Run every heuristic over one text and return the indicators found."""
+def analyse_text(
+    text: str,
+    *,
+    other_tool_names: Sequence[str] = (),
+    own_name: str = "",
+    addressed_to_model: bool = False,
+) -> list[Indicator]:
+    """Run every heuristic over one text and return the indicators found.
+
+    ``addressed_to_model`` marks text whose purpose is to guide the model (the server's
+    ``initialize.instructions``): steering the model between tools is its job there, so
+    shadowing wording is only a low-severity review note.
+    """
     indicators: list[Indicator] = []
     if not text:
         return indicators
@@ -296,11 +375,18 @@ def analyse_text(text: str, *, other_tool_names: Sequence[str] = (), own_name: s
         ("secret harvesting", _SECRET_HARVEST),
     ]
     for label, pattern in patterns:
-        found = [m.group(0) for m in pattern.finditer(text)]
+        found = [m.group(0) for m in pattern.finditer(text) if not _negated(text, m.start())]
         if found:
             instruction_kinds.append(label)
             instruction_matches.extend(found[:3])
             labelled.extend((label, f) for f in found[:3])
+    if instruction_kinds:
+        # Ordinary usage guidance only counts alongside a real instruction category.
+        weak = [m.group(0) for m in _WEAK_DIRECTIVE.finditer(text)]
+        if weak and "model directive" not in instruction_kinds:
+            instruction_kinds.append("model directive")
+            instruction_matches.extend(weak[:3])
+            labelled.extend(("model directive", w) for w in weak[:3])
     if instruction_kinds:
         strong = {"conceal from user", "override instructions"} & set(instruction_kinds)
         severe = len(instruction_kinds) >= 2 or bool(strong)
@@ -326,14 +412,19 @@ def analyse_text(text: str, *, other_tool_names: Sequence[str] = (), own_name: s
             )
         )
 
-    paths = sorted({m.group(0).strip() for m in _SENSITIVE_PATHS.finditer(text)})
+    path_hits = [m for m in _SENSITIVE_PATHS.finditer(text)]
+    paths = sorted({m.group(0).strip() for m in path_hits})
     if paths:
+        # A credential path after a read/send verb is a request; on its own it is a mention
+        # ("paths such as ~/.ssh are refused", "saves the keys to a .env file").
+        acted = [m.group(0).strip() for m in path_hits if _path_requested(text, m.start())]
         indicators.append(
             Indicator(
                 "sensitive_path",
-                Severity.MEDIUM,
-                Confidence.MEDIUM,
-                "references to credential or configuration file paths",
+                Severity.MEDIUM if acted else Severity.LOW,
+                Confidence.MEDIUM if acted else Confidence.LOW,
+                "references to credential or configuration file paths"
+                + (" next to a read/send verb" if acted else ""),
                 paths[:6],
             )
         )
@@ -343,37 +434,46 @@ def analyse_text(text: str, *, other_tool_names: Sequence[str] = (), own_name: s
     for name in other_tool_names:
         if not name or name == own_name or len(name) < 3:
             continue
-        if re.search(rf"(?<![\w.]){re.escape(name.lower())}(?!\w)(?!\.\w)", lowered):
+        if _identifier_like(name):
+            hit = re.search(rf"(?<![\w.]){re.escape(name.lower())}(?!\w)(?!\.\w)", lowered)
+        else:
+            # A dictionary-word tool name ("search", "pipelines") counts only when quoted.
+            hit = re.search(rf"[`'\"]{re.escape(name.lower())}[`'\"]", lowered)
+        if hit:
             refs.append(name)
-    if refs:
-        shadowing = bool(_SHADOW_CONTEXT.search(text))
+    shadowed = [name for name in refs if _shadows(text, name)]
+    if shadowed:
+        # A plain mention of a sibling tool ("get the ID from list_projects") is how real
+        # servers document workflows and is not reported; changing what it does is.
         indicators.append(
             Indicator(
                 "cross_tool_reference",
-                Severity.MEDIUM if shadowing else Severity.LOW,
-                Confidence.MEDIUM if shadowing else Confidence.LOW,
-                "mentions other tools"
-                + (" with behaviour-modifying language (shadowing)" if shadowing else ""),
-                refs[:6],
+                Severity.LOW if addressed_to_model else Severity.MEDIUM,
+                Confidence.LOW if addressed_to_model else Confidence.MEDIUM,
+                "mentions other tools with behaviour-modifying language (shadowing)",
+                shadowed[:6],
             )
         )
 
     urls = sorted({m.group(0) for m in _URL.finditer(text)})
     if urls:
+        # Documentation links and example URLs are not reported; a URL next to send/upload
+        # wording is a low review note, and medium when the text is about context or secrets.
         sends = bool(re.search(r"\b(send|post|upload|forward|submit|report)\b", lowered))
         sensitive = bool(re.search(_CONTEXT_NOUN, text, re.I) or re.search(_SECRET_NOUN, text, re.I))
         exfil_url = sends and sensitive
-        indicators.append(
-            Indicator(
-                "url",
-                Severity.MEDIUM if exfil_url else Severity.LOW,
-                Confidence.MEDIUM if exfil_url else Confidence.LOW,
-                "URL inside description"
-                + (" alongside send/upload wording about context or secrets" if exfil_url else ""),
-                urls[:4],
+        if sends:
+            indicators.append(
+                Indicator(
+                    "url",
+                    Severity.MEDIUM if exfil_url else Severity.LOW,
+                    Confidence.MEDIUM if exfil_url else Confidence.LOW,
+                    "URL inside description alongside send/upload wording"
+                    + (" about context or secrets" if exfil_url else ""),
+                    urls[:4],
+                )
             )
-        )
-    emails = sorted({m.group(0) for m in _EMAIL.finditer(text)})
+    emails = sorted({m.group(0) for m in _EMAIL.finditer(text) if not _EXAMPLE_EMAIL.search(m.group(0))})
     if emails and re.search(r"\b(bcc|cc|send|forward|copy)\b", lowered):
         indicators.append(
             Indicator(
@@ -467,23 +567,24 @@ class Meta01ToolDescriptionPoisoning(Check):
     description = (
         "Scans every tool, prompt and resource description, every inputSchema parameter "
         "description and the server 'instructions' for: prompt-style markup (<IMPORTANT>, "
-        "<system>, HTML comments), instructions aimed at the model (call this first / before any "
-        "other tool, you must, conceal from the user, ignore previous instructions, "
-        "redirect/replace), requests to send the model's context out (conversation, chat "
-        "history, system prompt, previous messages), requests to harvest secrets (the user's API "
-        "key, token, password, credentials, .env), credential file paths, "
-        "references to other tools with behaviour-modifying language (shadowing), URLs and "
-        "e-mail addresses with send/BCC wording, base64 blobs, zero-width/bidi/tag Unicode, "
-        "mixed-script homoglyphs and excessive length. Findings carry tiered confidence and "
-        "are never rated Critical on heuristics alone. A model directive combined with a request "
-        "to send context out is rated high. Precision is guarded by a corpus of benign "
-        "real-world descriptions in the test-suite that must stay below medium."
+        "<system>, HTML comments), instructions aimed at the model (conceal from the user, ignore "
+        "previous instructions, claim precedence over every other tool or over what the user asks, "
+        "redirect/replace), requests to send the model's context out (conversation, chat history, "
+        "system prompt, previous messages), requests to harvest secrets (the user's API key, token, "
+        "password, credentials, .env), credential file paths next to a read/send verb, wording that "
+        "changes what another tool does (shadowing), URLs and e-mail addresses with send/BCC "
+        "wording, base64 blobs, zero-width/bidi/tag Unicode, mixed-script homoglyphs and excessive "
+        'length. Ordinary usage guidance ("always use this tool to...", "you must call X '
+        'first") is not an indicator on its own; it raises a finding to high when combined with '
+        "another instruction category. Findings carry tiered confidence and are never rated "
+        "Critical on heuristics alone. Precision is guarded in the test-suite by thousands of real "
+        "descriptions from published MCP servers (docs/benchmark.md)."
     )
     evidence_type = "The tools/list (or prompts/resources/initialize) response and the matched excerpts."
     false_positive_notes = (
-        "Legitimate guidance such as 'IMPORTANT: call authenticate before this tool' matches the "
-        "markup and prerequisite heuristics at medium confidence. URLs to documentation and "
-        "mentions of sibling tools without behaviour-modifying words are reported at low severity. "
+        "Legitimate text that claims precedence over every other tool ('call this before any other "
+        "tool whenever...') is reported at medium. Plain URLs, sibling-tool mentions and usage "
+        "guidance are not reported; a credential path without a read/send verb is low. "
         "Review the matched excerpts; a second-opinion judge can be plugged in through the Python API (ScanOptions.judge); mcpprobe itself makes no LLM calls."
     )
     fix = (
@@ -507,7 +608,12 @@ class Meta01ToolDescriptionPoisoning(Check):
             "instructions": None,
         }
         for item in collect_text_items(ctx):
-            indicators = analyse_text(item.text, other_tool_names=names, own_name=item.owner)
+            indicators = analyse_text(
+                item.text,
+                other_tool_names=names,
+                own_name=item.owner,
+                addressed_to_model=item.kind == "instructions",
+            )
             if ctx.options.judge is not None:
                 verdict = ctx.options.judge(item.text, f"tool-description poisoning review for {item.path}")
                 if verdict is not None and verdict.suspicious:

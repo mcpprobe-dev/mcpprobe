@@ -37,6 +37,25 @@ SURVEY_CHECKS: tuple[str, ...] = (
     "META-07",  # toxic flow / lethal trifecta (static, inventory)
 )
 
+#: Checks a ``recheck`` re-runs by default: the ones that read the tool list, whose rules can
+#: change between releases without the server changing.
+RECHECK_CHECKS: tuple[str, ...] = ("META-01", "META-03", "META-05", "META-07")
+
+#: Capability classes (META-03 labels) that write, execute or move data: the "write/exec-capable"
+#: cross-tab. ``arbitrary_*`` are the free-form shell/file capabilities META-03 rates high.
+WRITE_EXEC_CAPABILITIES: frozenset[str] = frozenset(
+    {
+        "exec",
+        "file_write",
+        "database_write",
+        "email",
+        "payments",
+        "arbitrary_command_execution",
+        "arbitrary_file_read",
+        "arbitrary_file_write",
+    }
+)
+
 #: Checks that work on tool definitions alone (no request at all).
 STATIC_CHECKS: tuple[str, ...] = ("META-01", "META-06", "META-07")
 
@@ -110,6 +129,21 @@ class WorkDir:
     @property
     def aggregates(self) -> Path:
         return self.root / "aggregates.json"
+
+    @property
+    def recheck(self) -> Path:
+        """The current recheck pass (resumable checkpoint)."""
+        return self.root / "recheck.jsonl"
+
+    def recheck_files(self) -> list[Path]:
+        """Earlier passes (``recheck-<UTC time>.jsonl``, oldest first), then the current one."""
+        archived = sorted(self.root.glob("recheck-*.jsonl"))
+        return [*archived, *([self.recheck] if self.recheck.exists() else [])]
+
+    @property
+    def disclosure_summary(self) -> Path:
+        """Counts only (no host): safe to share, unlike the PRIVATE queue."""
+        return self.root / "disclosure-summary.json"
 
     @property
     def disclosure_queue(self) -> Path:

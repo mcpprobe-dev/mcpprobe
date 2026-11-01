@@ -1,4 +1,7 @@
-"""``mcpprobe registry-report {fetch,scan,calibrate,aggregate,render}`` (also ``python -m mcpprobe.registry``)."""
+"""``mcpprobe registry-report {fetch,scan,calibrate,aggregate,recheck,reaggregate,render}``.
+
+Also ``python -m mcpprobe.registry``.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +13,7 @@ from typing import Any
 import click
 
 from mcpprobe.registry.batch import BatchConfig
-from mcpprobe.registry.common import MAX_CONCURRENCY, WorkDir
+from mcpprobe.registry.common import MAX_CONCURRENCY, RECHECK_CHECKS, WorkDir
 from mcpprobe.registry.fetch import (
     DEFAULT_API_PATH,
     DEFAULT_BASE,
@@ -22,6 +25,8 @@ from mcpprobe.registry.pipeline import (
     StageError,
     aggregate_stage,
     calibrate_stage,
+    reaggregate_stage,
+    recheck_stage,
     render_stage,
     scan_stage,
 )
@@ -49,6 +54,7 @@ def registry_report() -> None:
     """Build the anonymised "State of MCP server security" report from the official MCP Registry.
 
     Stages: fetch -> scan -> (calibrate) -> aggregate -> render. Each is resumable from --workdir.
+    After a scanner update: recheck (passive, selected hosts only) -> reaggregate -> render.
     """
 
 
@@ -170,9 +176,112 @@ def aggregate_cmd(workdir: Path, dry_run: bool, benchmark: Path | None) -> None:
             "host_statuses": agg["funnel"].get("host_statuses"),
             "metrics": {m["id"]: f"{m['numerator']}/{m['denominator']}" for m in agg["metrics"]},
             "disclosure_queue_hosts": n_disclose,
+            "disclosure_by_priority": (agg.get("disclosure") or {}).get("by_priority"),
             "written": not dry_run,
         }
     )
+
+
+@registry_report.command("recheck")
+@WORKDIR
+@DRY_RUN
+@click.option(
+    "--from-queue",
+    is_flag=True,
+    help="Only hosts in the PRIVATE disclosure queue (run reaggregate first). Default: every scanned "
+    "host on which one of --checks reached a result (its tool list was visible).",
+)
+@click.option(
+    "--checks",
+    default=",".join(RECHECK_CHECKS),
+    show_default=True,
+    help="Comma-separated survey-profile checks to re-run.",
+)
+@click.option(
+    "--exclude-file",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help="Hosts never to contact, one per line (*.example.com for a zone).",
+)
+@click.option(
+    "--concurrency",
+    default=MAX_CONCURRENCY,
+    show_default=True,
+    type=click.IntRange(1, MAX_CONCURRENCY),
+    help="Hosts rechecked in parallel (hard maximum 8).",
+)
+@click.option("--limit", type=int, default=None, help="Recheck at most this many hosts in this run.")
+@click.option("--timeout", default=15.0, show_default=True, help="Per-request timeout in seconds.")
+@click.option(
+    "--new-pass",
+    is_flag=True,
+    help="Archive the current pass (recheck.jsonl) and check every selected host again.",
+)
+def recheck_cmd(
+    workdir: Path,
+    dry_run: bool,
+    from_queue: bool,
+    checks: str,
+    exclude_file: Path | None,
+    concurrency: int,
+    limit: int | None,
+    timeout: float,
+    new_pass: bool,
+) -> None:
+    """Re-run passive survey checks on selected hosts with this scanner (checkpointed to recheck.jsonl).
+
+    Same rules as scan: opt-out first, identifying User-Agent, 1 request/s per provider,
+    at most 8 hosts, public pinned addresses, same origin, stop on 429/403, no bodies kept.
+    """
+    cfg = BatchConfig(concurrency=concurrency, timeout=timeout)
+    try:
+        res = asyncio.run(
+            recheck_stage(
+                WorkDir(workdir),
+                from_queue=from_queue,
+                checks=[c.strip() for c in checks.split(",") if c.strip()],
+                exclusions_file=exclude_file,
+                cfg=cfg,
+                limit=limit,
+                dry_run=dry_run,
+                new_pass=new_pass,
+            )
+        )
+    except StageError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _echo(
+        {
+            "checks": res.checks,
+            "selected_hosts": res.hosts,
+            "already_done": res.batch.already_done,
+            "rechecked_now": res.batch.scanned_now,
+            "remaining": res.batch.remaining,
+            "statuses_now": dict(res.batch.statuses),
+            "plan": res.batch.plan,
+            "notes": res.notes,
+        }
+    )
+
+
+@registry_report.command("reaggregate")
+@WORKDIR
+@DRY_RUN
+@click.option(
+    "--benchmark",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help="docs/benchmark.md to take the META-01 false-positive rate from (default: the repository's).",
+)
+def reaggregate_cmd(workdir: Path, dry_run: bool, benchmark: Path | None) -> None:
+    """Offline: re-run static checks, merge scan + recheck outcomes, rebuild aggregates and the queue.
+
+    Sends nothing. Prints before/after counts for every metric and the queue priorities.
+    """
+    try:
+        out = asyncio.run(reaggregate_stage(WorkDir(workdir), benchmark=benchmark, dry_run=dry_run))
+    except StageError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _echo(out)
 
 
 @registry_report.command("render")

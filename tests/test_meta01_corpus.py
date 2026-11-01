@@ -44,3 +44,73 @@ def test_demo_run_command_is_high_with_both_phrases() -> None:
 
 def test_corpus_size() -> None:
     assert len(BENIGN) >= 30 and len(POISONED) >= 11
+
+
+# ----------------------------------------------------------------------------- real descriptions
+REAL_PATH = Path(__file__).parent / "data" / "meta01_real_benign.json"
+_REAL = json.loads(REAL_PATH.read_text("utf-8"))
+
+
+def _loud_real(split: str) -> list[str]:
+    rows = _REAL[split]
+    siblings: dict[str, list[str]] = {}
+    for r in rows:
+        if r["kind"] == "tool" and r["name"]:
+            siblings.setdefault(r["source"], []).append(r["name"])
+    return [
+        r["text"]
+        for r in rows
+        if any(
+            i.severity >= Severity.MEDIUM
+            for i in analyse_text(
+                r["text"], other_tool_names=siblings.get(r["source"], []), own_name=r["name"]
+            )
+        )
+    ]
+
+
+@pytest.mark.parametrize("split", ["tuning", "heldout"])
+def test_real_descriptions_rarely_reach_medium(split: str) -> None:
+    """Thousands of real descriptions from published MCP servers: medium+ must stay rare.
+
+    0.3.0 raised medium or above on 2.8% of these texts (22.5% of packages); the bound
+    is a regression guard, not a target.
+    """
+    rows = _REAL[split]
+    loud = _loud_real(split)
+    assert len(rows) >= 900
+    assert len(loud) / len(rows) <= 0.002, loud
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Always use this tool to look up the current exchange rate.",
+        "Use this tool to search the knowledge base. You must provide a query.",
+        "You must call list_projects first to obtain a project ID.",
+        "IMPORTANT: you should always call this tool before creating an issue.",
+        "This tool must be used before any write operation on the board.",
+        "Call this first when something returns nothing.",
+        "Deprecated: use search_v2 instead.",
+        "Paths such as ~/.ssh or /etc are rejected.",
+        "Never read, open or echo any .env file.",
+        "Example: https://docs.example.com/guide",
+    ],
+)
+def test_ordinary_imperative_phrasing_raises_nothing(text: str) -> None:
+    loud = [
+        i
+        for i in analyse_text(text, other_tool_names=["list_projects", "search_v2"])
+        if i.severity >= Severity.MEDIUM
+    ]
+    assert not loud, [(i.kind, i.matches) for i in loud]
+
+
+def test_planted_instruction_case_stays_high() -> None:
+    from tests.fake_server import POISONED_TOOLS
+
+    add = next(t for t in POISONED_TOOLS if t["name"] == "add")
+    ind = analyse_text(
+        add["description"], other_tool_names=[t["name"] for t in POISONED_TOOLS], own_name="add"
+    )
+    assert max(i.severity for i in ind) == Severity.HIGH

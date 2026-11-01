@@ -54,8 +54,74 @@ def _ci(m: dict[str, Any]) -> str:
 def metrics_table(metrics: list[dict[str, Any]]) -> str:
     lines = ["| Measure | Hosts | Rate | 95% CI | Population |", "|---|---|---|---|---|"]
     for m in metrics:
+        hosts = (
+            f"{m['suppressed']} of {m['denominator']}"
+            if m.get("suppressed")
+            else f"{m['numerator']}/{m['denominator']}"
+        )
+        lines.append(f"| {m['label']} | {hosts} | {pct(m['rate'])} | {_ci(m)} | {m['population']} |")
+    return "\n".join(lines)
+
+
+def crosstab_table(ct: dict[str, Any]) -> str:
+    rows = [
+        *(ct.get("dangerous_capability_by_auth") or []),
+        *(ct.get("toxic_flow_by_auth") or []),
+        *(ct.get("open_capability") or []),
+    ]
+    return metrics_table(rows) if rows else "Cross-tabulations were not computed for this run."
+
+
+def tool_count_table(ct: dict[str, Any], min_cell: Any) -> str:
+    dist = ct.get("tool_count_distribution") or {}
+    buckets = dist.get("buckets") or {}
+    total = dist.get("hosts") or 0
+    lines = ["| Tools advertised | Hosts | Share |", "|---|---|---|"]
+    for bucket, n in buckets.items():
+        if n is None:
+            lines.append(f"| {bucket} | fewer than {min_cell} | n/a |")
+        else:
+            lines.append(f"| {bucket} | {n} | {pct(n / total if total else None)} |")
+    if not buckets:
+        lines.append("| (none) | 0 | n/a |")
+    return "\n".join(lines)
+
+
+def meta01_rules_note(agg: dict[str, Any]) -> str:
+    info = agg.get("meta01_rules") or {}
+    by = info.get("hosts_by_rules") or {}
+    current = by.get("current", 0)
+    older = sum(n for k, n in by.items() if k != "current")
+    text = (
+        f"META-01 rates count only hosts assessed with META-01 rules {info.get('current', 'n/a')} "
+        f"({current} host(s))."
+    )
+    if older:
+        text += (
+            f" {older} host(s) were last assessed with older rules, which flagged ordinary usage "
+            "guidance (see docs/benchmark.md); they are left out of the META-01 rates until rechecked."
+        )
+    return text
+
+
+def disclosure_section(agg: dict[str, Any]) -> str:
+    d = agg.get("disclosure")
+    if not d:
+        return "Disclosure counts were not computed for this run."
+
+    def n(v: Any) -> str:
+        return f"fewer than {agg.get('min_cell', '')}" if v is None else str(v)
+
+    lines = [
+        f"{n(d.get('hosts'))} host(s) met the disclosure criteria:",
+        "",
+        "| Priority | Criterion | Hosts (by highest priority) | Hosts meeting the criterion |",
+        "|---|---|---|---|",
+    ]
+    for p, crit in (d.get("criteria") or {}).items():
         lines.append(
-            f"| {m['label']} | {m['numerator']}/{m['denominator']} | {pct(m['rate'])} | {_ci(m)} | {m['population']} |"
+            f"| {p} | {crit} | {n((d.get('by_priority') or {}).get(p))} | "
+            f"{n((d.get('meeting_criterion') or {}).get(p))} |"
         )
     return "\n".join(lines)
 
@@ -265,6 +331,10 @@ def render(
         "flavour_table": counts_table(agg.get("flavours") or {}, "Negotiation"),
         "edge_table": counts_table(agg.get("edge_providers") or {}, "Edge"),
         "accuracy_section": accuracy_section(agg.get("accuracy") or {}),
+        "crosstab_table": crosstab_table(agg.get("crosstabs") or {}),
+        "tool_count_table": tool_count_table(agg.get("crosstabs") or {}, agg.get("min_cell", "")),
+        "poisoning_rules_note": meta01_rules_note(agg),
+        "disclosure_section": disclosure_section(agg),
         "fixed_section": fixed_section(list(fixed_hosts), fixed_count),
         "chart_headline": "![Headline rates with 95% confidence intervals](chart-headline.svg)",
         "chart_protocols": "![Protocol revisions negotiated](chart-protocols.svg)",

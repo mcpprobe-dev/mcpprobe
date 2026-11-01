@@ -19,7 +19,9 @@ Guarantees, enforced in code rather than by convention:
 * **Stop on 429/403.** The first HTTP 429 or 403 stops all further requests to that rate
   key for the rest of the run (and for resumed runs); Retry-After is not waited out.
 * **No bodies kept.** Evidence lives in memory for the duration of one host's scan; the
-  checkpoint holds outcomes, counts, the negotiated revision and the edge label only.
+  checkpoint holds outcomes, counts, the negotiated revision, the edge label, the META-01
+  rules revision and derived labels (capability classes, META-01 indicator kinds) only:
+  never a description, tool name or other text from the host.
 """
 
 from __future__ import annotations
@@ -37,7 +39,8 @@ import httpx
 
 from mcpprobe import USER_AGENT
 from mcpprobe.checks import ScanOptions
-from mcpprobe.models import CheckStatus, ScanReport, utcnow
+from mcpprobe.checks.poisoning import RULES_VERSION as META01_RULES
+from mcpprobe.models import CheckStatus, ScanReport, Severity, utcnow
 from mcpprobe.policy import OptOutError
 from mcpprobe.registry.common import (
     MAX_CONCURRENCY,
@@ -247,6 +250,32 @@ def outcomes_from_report(report: ScanReport) -> dict[str, str]:
     return out
 
 
+def derived_labels(report: ScanReport) -> dict[str, Any]:
+    """Labels (never host text) for cross-tabs: capability classes and META-01 indicator kinds."""
+    capabilities: set[str] = set()
+    meta01: set[str] = set()
+    for result in report.checks:
+        for f in result.findings:
+            details = f.details or {}
+            if result.check_id == "META-03":
+                for kinds in (details.get("arbitrary") or {}).values():
+                    capabilities.update(str(k) for k in kinds)
+                capabilities.update(str(k) for k in (details.get("by_class") or {}))
+            elif result.check_id == "META-01" and f.severity.rank >= Severity.MEDIUM.rank:
+                meta01.update(
+                    str(i.get("kind"))
+                    for i in details.get("indicators") or []
+                    if str(i.get("severity")) in ("medium", "high", "critical")
+                )
+    ran = {r.check_id for r in report.checks if r.status == CheckStatus.RAN}
+    out: dict[str, Any] = {}
+    if "META-03" in ran:
+        out["capabilities"] = sorted(capabilities)
+    if "META-01" in ran:
+        out["meta01_indicators"] = sorted(meta01)
+    return out
+
+
 async def scan_target(
     target: dict[str, Any], cfg: BatchConfig, state: GuardState, pacer: HostPacer
 ) -> dict[str, Any]:
@@ -326,6 +355,9 @@ async def scan_target(
         auth_required=bool(fp.auth_required) if fp else None,
         edge=report.environment.edge if report.environment else None,
         inventory=dict(report.inventory_summary or {}),
+        meta01_rules=META01_RULES if "META-01" in cfg.checks else None,
+        checks_run=list(cfg.checks),
+        **derived_labels(report),
     )
 
 

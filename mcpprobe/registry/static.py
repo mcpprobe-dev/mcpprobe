@@ -19,6 +19,7 @@ from collections.abc import Callable, Iterable
 from typing import Any
 
 from mcpprobe.checks import NotApplicable, ScanContext, get_check
+from mcpprobe.checks.poisoning import RULES_VERSION as META01_RULES
 from mcpprobe.models import Fingerprint, Inventory
 from mcpprobe.registry.common import STATIC_CHECKS, Outcome, findings_outcome
 from mcpprobe.transport import EvidenceLog, RpcResponse, Transport
@@ -75,7 +76,12 @@ async def assess_entry(entry: dict[str, Any], package_tools: PackageTools | None
     if not tools and package_tools is not None:
         tools = package_tools(entry)
         source = "package_metadata" if tools else None
-    record: dict[str, Any] = {"name": entry["name"], "kind": kind, "tool_source": source}
+    record: dict[str, Any] = {
+        "name": entry["name"],
+        "kind": kind,
+        "tool_source": source,
+        "meta01_rules": META01_RULES,
+    }
     if not tools:
         reason = (
             "registry entry lists tool names only, without descriptions or annotations"
