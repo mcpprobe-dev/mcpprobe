@@ -329,7 +329,9 @@ fields is set; it then stays with `priority: null` until you close it.
    scanning policy. Do not send anything a third party could misuse in transit: keep
    tool text to the minimum needed to recognise the issue.
 4. **The deadline is 90 days** from first contact, or sooner if the operator confirms a
-   fix. Record `notified_at` and, once verified, `fixed_at`.
+   fix. Record `notified_at` and, once verified, `fixed_at`. P4 is the exception: it gets
+   one advisory only, with no deadline and no reminders, and only after the hand check
+   above has passed.
 5. **Publish aggregates only.** The report never names a host whose finding is unfixed.
    A host whose finding is fixed is named only if all of the following hold:
    - its queue entry has `"may_name": true`, set after the operator agreed in writing;
