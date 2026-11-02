@@ -144,20 +144,107 @@ def test_personal_addresses_are_never_recorded(wd, tmp_path):
         rows, _, _ = run(wd, segment)
         oc.write_csv(rows, out)
         text = out.read_text()
+        # Withheld everywhere: each sits next to a security role address, or is on a website.
         for personal in ("jane.doe@acme.example", "dev42.personal@gmail.com", "jane@widgets.example"):
             assert personal not in text
 
 
-def test_p4_only_when_asked(wd):
-    rows, _, _ = run(wd, "A", priorities=("P4",))
-    assert [r["org"] for r in rows] == ["example.net"]
+def _p4_queue(wd, n):
+    queue = [
+        {
+            "host": f"t{i}.p4.example",
+            "url": f"https://t{i}.p4.example/mcp",
+            "entries": [f"example.p4/t{i}"],
+            "priority": "P4",
+        }
+        for i in range(n)
+    ]
+    queue.append(
+        {
+            "host": "p1.acme.example",
+            "url": "https://p1.acme.example/mcp",
+            "entries": ["example.acme/p1"],
+            "priority": "P1",
+        }
+    )
+    wd.disclosure_queue.write_text(json.dumps(queue))
+    return [q["host"] for q in queue if q["priority"] == "P4"]
 
 
-def test_rfc2142_guess_is_opt_in_and_never_eligible(wd):
-    rows, _, _ = run(wd, "A", allow_rfc2142=True)
-    stale = by_org(rows)["stale.example"]
-    assert stale["contact"] == "security@stale.example"
-    assert stale["source"] == "rfc2142 (unverified)" and stale["eligible"] == "false"
+def _hand_check(tmp_path, rows):
+    f = tmp_path / "PRIVATE-p4-hand-check.csv"
+    f.write_text("host,correct\n" + "".join(f"{h},{c}\n" for h, c in rows))
+    return f
+
+
+def test_p4_is_refused_without_a_hand_check(wd):
+    with pytest.raises(SystemExit, match="P4 is gated"):
+        run(wd, "A", priorities=("P4",))
+
+
+def test_p4_needs_fifty_hosts_and_ninety_percent(wd, tmp_path):
+    hosts = _p4_queue(wd, 60)
+    few = _hand_check(tmp_path, [(h, "yes") for h in hosts[:49]])
+    with pytest.raises(SystemExit, match="49 hosts"):
+        run(wd, "A", priorities=("P4",), p4_hand_check=few)
+    poor = _hand_check(tmp_path, [(h, "yes") for h in hosts[:44]] + [(h, "no") for h in hosts[44:50]])
+    with pytest.raises(SystemExit, match="44/50"):
+        run(wd, "A", priorities=("P4",), p4_hand_check=poor)
+    padded = _hand_check(tmp_path, [(h, "yes") for h in hosts[:49]] + [("p1.acme.example", "yes")])
+    with pytest.raises(SystemExit, match="not a P4 host"):
+        run(wd, "A", priorities=("P4",), p4_hand_check=padded)
+    good = _hand_check(tmp_path, [(h, "yes") for h in hosts[:45]] + [(h, "no") for h in hosts[45:50]])
+    rows, stats, _ = run(wd, "A", priorities=("P4",), p4_hand_check=good)
+    [row] = rows  # one organisation, p4.example
+    assert row["priority"] == "P4" and len(row["hosts"].split(";")) == 60
+    assert (stats["p4_hand_check_correct"], stats["p4_hand_check_sample"]) == (45, 50)
+
+
+def test_addresses_are_never_guessed(wd):
+    rows, _, _ = run(wd, "A")
+    stale = by_org(rows)["stale.example"]  # its only security.txt has expired
+    assert stale["contact"] == "" and stale["notes"].startswith("no published contact")
+    assert all("rfc2142" not in r["source"] for r in rows)
+    with pytest.raises(SystemExit):
+        oc.main(
+            [
+                "--workdir",
+                str(wd.root),
+                "--segment",
+                "A",
+                "--dry-run",
+                "--fixtures",
+                str(FIXTURES),
+                "--allow-rfc2142",
+                "--out",
+                "x.csv",
+            ]
+        )
+
+
+def _solo(tmp_path, **outcomes):
+    w = WorkDir(tmp_path / "solo").ensure()
+    w.scan.write_text(json.dumps(rec("mcp.solo.example", "example.solo/tool", **outcomes)) + "\n")
+    return w
+
+
+def test_named_security_contact_is_used_for_segment_a_only_with_its_source(tmp_path):
+    rows, stats, _ = run(_solo(tmp_path, META_05="high"), "A")
+    [row] = rows
+    assert row["contact"] == "alex.smith@solo.example"
+    assert row["address_kind"] == "named" and row["eligible"] == "true"
+    assert row["source"] == "security.txt (organisation domain)"
+    assert row["source_url"] == "https://solo.example/.well-known/security.txt"
+    assert "segment A only" in row["notes"] and stats["withheld_non_role_addresses"] == 0
+    # Marketing never takes a named address, even one published in security.txt.
+    rows_b, stats_b, _ = run(_solo(tmp_path / "b"), "B")
+    assert [r["contact"] for r in rows_b] == [""] and stats_b["withheld_non_role_addresses"] == 1
+
+
+def test_named_address_is_not_kept_when_a_security_role_is_published(wd):
+    rows, _, _ = run(wd, "A")
+    acme = [r for r in rows if r["org"] == "acme.example"]
+    assert [(r["contact"], r["address_kind"]) for r in acme] == [("security@acme.example", "role")]
 
 
 def test_segment_b_marketing_is_corporate_role_addresses_only_and_excludes_a(wd):
@@ -229,7 +316,8 @@ def test_cli_needs_an_explicit_mode(wd, tmp_path):
                 "--dry-run",
                 "--fixtures",
                 str(FIXTURES),
-                "--allow-rfc2142",
+                "--priority",
+                "P1",
                 "--out",
                 str(tmp_path / "x.csv"),
             ]

@@ -1,0 +1,2 @@
+Contact: mailto:alex.smith@solo.example
+Expires: 2027-06-30T00:00:00Z

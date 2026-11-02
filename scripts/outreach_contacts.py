@@ -10,17 +10,26 @@ organisation and a contact address **only from channels the operator published**
    repository (GitHub, GitLab);
 4. the registry entry's ``websiteUrl`` and its ``/security`` and ``/contact`` pages.
 
-Only role addresses are kept (security@, psirt@, hello@, contact@ …). A personal-looking
-address is never recorded, only counted as withheld. Each contact carries its source URL
-and retrieval time. Segment A (disclosure) takes security roles; segments B and C
-(marketing) take general roles only, never security@, and only from corporate subscribers
-(PECR): a free-mail domain, a personal GitHub namespace or anything unclear is ineligible.
+Role addresses are preferred (security@, psirt@, hello@, contact@ …). Segment A
+(disclosure) takes security roles first. A named address (jane@…) is recorded **only for
+segment A**, only when the operator published it as a security contact in ``security.txt``
+or ``SECURITY.md``, and only when that same file names no security role address; the row
+says ``address_kind=named`` and carries its source URL. Every other non-role address is
+never recorded, only counted as withheld. Segments B and C (marketing) take general role
+addresses only, never security@, never a named address, and only from corporate
+subscribers (PECR): a free-mail domain, a personal GitHub namespace or anything unclear is
+ineligible. Addresses are never guessed: an organisation without a published contact is
+listed as "no published contact".
 
 Segments (see the web repo's emails/outreach/PLAN.md):
   A  hosts in PRIVATE-disclosure-queue.json (default priorities P1-P3)
   B  scanned, tools observable, not in the queue
   C  scanned, login required (tool checks "blocked"), not in the queue
 An organisation with any host in A is never listed in B or C.
+
+P4 (META-07, medium, heuristic) is gated: ``--priority P4`` is refused unless
+``--p4-hand-check CSV`` records a manual check of at least 50 distinct P4 hosts with at
+least 90% of them confirmed correct (columns ``host,correct``; correct is yes/no).
 
 Nothing is fetched unless ``--live`` is given; ``--dry-run --fixtures DIR`` reads a fixture
 map instead. Nothing is ever sent. The CSV is refused inside a git work tree unless the
@@ -190,6 +199,7 @@ CSV_FIELDS = (
     "server_names",
     "contact",
     "contact_type",
+    "address_kind",
     "source",
     "source_url",
     "retrieved_at",
@@ -461,6 +471,7 @@ class Found:
     source: str
     source_url: str
     retrieved_at: str
+    address_kind: str = ""  # "role", "named" (segment A only) or "" for a URL contact
 
 
 class Discoverer:
@@ -470,28 +481,37 @@ class Discoverer:
         *,
         segment: str,
         now: datetime,
-        allow_rfc2142: bool = False,
         extra_platforms: Iterable[str] = (),
     ) -> None:
         self.fetcher = fetcher
         self.segment = segment
         self.now = now
-        self.allow_rfc2142 = allow_rfc2142
         self.extra_platforms = tuple(extra_platforms)
         self.withheld = 0
 
-    def _accept(self, addresses: Iterable[str]) -> list[str]:
-        """Role addresses this segment may use; anything else is counted and dropped, never stored."""
+    def _accept(self, addresses: Iterable[str], *, security_channel: bool = False) -> list[tuple[str, str]]:
+        """(address, kind) pairs this segment may use; anything else is counted and dropped, never stored.
+
+        A named address is kept only for segment A, only from a security channel the operator
+        published (security.txt, SECURITY.md), and only when that file names no security role.
+        """
         want = {"security", "general"} if self.segment == "A" else {"general"}
-        out = []
+        roles: list[str] = []
+        named: list[str] = []
         for a in dict.fromkeys(x.lower() for x in addresses):
             role = role_of(a)
             if role is None:
-                self.withheld += 1
+                named.append(a)
             elif role in want:
-                out.append(a)
+                roles.append(a)
         if self.segment == "A":  # security roles first
-            out.sort(key=lambda a: role_of(a) != "security")
+            roles.sort(key=lambda a: role_of(a) != "security")
+        has_security_role = any(role_of(a) == "security" for a in roles)
+        if self.segment == "A" and security_channel and not has_security_role and named:
+            out = [(a, "named") for a in named] + [(a, "role") for a in roles]
+        else:
+            self.withheld += len(named)
+            out = [(a, "role") for a in roles]
         return out
 
     def _stamp(self) -> str:
@@ -510,7 +530,8 @@ class Discoverer:
             notes.append(f"{label}: security.txt {problem}")
             return []
         found = [
-            Found(a, "email", f"security.txt ({label})", url, self._stamp()) for a in self._accept(mails)
+            Found(a, "email", f"security.txt ({label})", url, self._stamp(), kind)
+            for a, kind in self._accept(mails, security_channel=True)
         ]
         if self.segment == "A" and not found:
             found = [Found(u, "url", f"security.txt ({label})", url, self._stamp()) for u in uris]
@@ -522,8 +543,8 @@ class Discoverer:
             if page.status != 200 or not page.text:
                 continue
             found = [
-                Found(a, "email", "repository SECURITY.md", url, self._stamp())
-                for a in self._accept(emails_in(page.text))
+                Found(a, "email", "repository SECURITY.md", url, self._stamp(), kind)
+                for a, kind in self._accept(emails_in(page.text), security_channel=True)
             ]
             if (
                 self.segment == "A"
@@ -556,8 +577,8 @@ class Discoverer:
                 continue
             mails = [m.removeprefix("mailto:") for m in re.findall(r"mailto:([^\"'?>\s]+)", page.text, re.I)]
             found = [
-                Found(a, "email", "website", url, self._stamp())
-                for a in self._accept(mails + emails_in(page.text))
+                Found(a, "email", "website", url, self._stamp(), kind)
+                for a, kind in self._accept(mails + emails_in(page.text))
             ]
             if found:
                 return found
@@ -581,12 +602,7 @@ class Discoverer:
         for n in names:
             if (site := meta.get(n, {}).get("website")) and (found := self._website(site, notes)):
                 return found, notes
-        if self.segment == "A" and self.allow_rfc2142 and org.domain:
-            notes.append("RFC 2142 guess, not published: needs owner decision before use")
-            return [
-                Found(f"security@{org.domain}", "email", "rfc2142 (unverified)", "", self._stamp())
-            ], notes
-        return [], notes
+        return [], notes  # never guessed (no RFC 2142 security@<domain>): no published contact
 
 
 def subscriber_type(contact: str, org: Org) -> str:
@@ -634,6 +650,48 @@ def ensure_private_path(out: Path) -> None:
         )
 
 
+P4_SAMPLE_MIN = 50
+P4_PRECISION_MIN = 0.90
+_YES = {"yes", "y", "true", "1", "correct"}
+_NO = {"no", "n", "false", "0", "wrong", "incorrect"}
+
+
+def p4_gate(wd: WorkDir, hand_check: Path | None) -> tuple[int, int]:
+    """Refuse P4 unless a hand check of >= 50 distinct P4 hosts found >= 90% correct.
+
+    The file is a CSV with columns ``host`` and ``correct`` (yes/no). Every host must be a P4
+    host in the disclosure queue, so the sample cannot be padded with P1-P3 cases. Returns
+    (correct, checked).
+    """
+    if hand_check is None:
+        raise SystemExit(
+            "P4 is gated: hand-check a random sample of at least "
+            f"{P4_SAMPLE_MIN} P4 hosts and pass it with --p4-hand-check (see PLAN.md section 4)"
+        )
+    p4_hosts = {d["host"] for d in _queue(wd, None) if d.get("priority") == "P4"}
+    verdicts: dict[str, bool] = {}
+    with hand_check.open(newline="", encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            host = (row.get("host") or "").strip().lower()
+            mark = (row.get("correct") or "").strip().lower()
+            if not host:
+                continue
+            if host not in p4_hosts:
+                raise SystemExit(f"P4 hand check: {host} is not a P4 host in the disclosure queue")
+            if mark not in _YES | _NO:
+                raise SystemExit(f"P4 hand check: {host} has no yes/no verdict")
+            verdicts[host] = mark in _YES
+    n = len(verdicts)
+    ok = sum(verdicts.values())
+    if n < P4_SAMPLE_MIN:
+        raise SystemExit(f"P4 hand check covers {n} hosts; at least {P4_SAMPLE_MIN} are needed")
+    if ok / n < P4_PRECISION_MIN:
+        raise SystemExit(
+            f"P4 hand check: {ok}/{n} correct ({ok / n:.0%}), below {P4_PRECISION_MIN:.0%}: do not send P4"
+        )
+    return ok, n
+
+
 def run(
     wd: WorkDir,
     segment: str,
@@ -641,12 +699,16 @@ def run(
     *,
     priorities: Iterable[str] = ("P1", "P2", "P3"),
     now: datetime | None = None,
-    allow_rfc2142: bool = False,
     suppress: set[str] | None = None,
     extra_platforms: Iterable[str] = (),
     limit: int | None = None,
+    p4_hand_check: Path | None = None,
 ) -> tuple[list[dict[str, str]], dict[str, int]]:
     now = now or datetime.now(UTC)
+    priorities = tuple(priorities)
+    p4_checked: tuple[int, int] | None = None
+    if segment == "A" and "P4" in priorities:
+        p4_checked = p4_gate(wd, p4_hand_check)
     targets, queued_hosts = load_segment(wd, segment, priorities)
     meta = load_registry_meta(wd)
     orgs: dict[str, Org] = {}
@@ -661,9 +723,7 @@ def run(
                 a_keys.add(org_of(Target(d["host"], "", list(d.get("entries") or [])), extra_platforms).key)
         excluded_a = sum(1 for k in orgs if k in a_keys)
         orgs = {k: o for k, o in orgs.items() if k not in a_keys}
-    disc = Discoverer(
-        fetcher, segment=segment, now=now, allow_rfc2142=allow_rfc2142, extra_platforms=extra_platforms
-    )
+    disc = Discoverer(fetcher, segment=segment, now=now, extra_platforms=extra_platforms)
     suppress = suppress or set()
     rows: list[dict[str, str]] = []
     stats = {
@@ -696,6 +756,7 @@ def run(
                     **base,
                     "contact": "",
                     "contact_type": "",
+                    "address_kind": "",
                     "source": "",
                     "source_url": "",
                     "retrieved_at": now.isoformat(timespec="seconds"),
@@ -709,8 +770,8 @@ def run(
             sub = subscriber_type(f.contact, org)
             row_notes = [*notes, *host_notes]
             eligible = True
-            if f.source.startswith("rfc2142"):
-                eligible = False
+            if f.address_kind == "named":
+                row_notes.append("named address published as the security contact (segment A only)")
             if segment in ("B", "C") and sub != "corporate":
                 eligible = False
                 row_notes.append("PECR: not a corporate subscriber, no marketing")
@@ -725,6 +786,7 @@ def run(
                     **base,
                     "contact": f.contact,
                     "contact_type": f.contact_type,
+                    "address_kind": f.address_kind,
                     "source": f.source,
                     "source_url": f.source_url,
                     "retrieved_at": f.retrieved_at,
@@ -733,6 +795,8 @@ def run(
                     "notes": "; ".join(row_notes),
                 }
             )
+    if p4_checked is not None:
+        stats["p4_hand_check_correct"], stats["p4_hand_check_sample"] = p4_checked
     stats["withheld_non_role_addresses"] = disc.withheld
     stats["rows"] = len(rows)
     stats["eligible_rows"] = sum(1 for r in rows if r["eligible"] == "true")
@@ -770,25 +834,27 @@ def main(argv: list[str] | None = None) -> int:
         "--suppress", type=Path, help="Suppression list: emails, sha256 of emails, domains or hosts"
     )
     ap.add_argument(
-        "--allow-rfc2142", action="store_true", help="Segment A only: guess security@<domain> (unverified)"
+        "--p4-hand-check",
+        type=Path,
+        help="CSV (host,correct) of a manual check of >= 50 P4 hosts; required for --priority P4",
     )
     ap.add_argument("--platform-suffix", action="append", default=[], help="Extra shared-hosting suffix")
     ap.add_argument("--limit", type=int, help="Stop after N organisations")
     args = ap.parse_args(argv)
     if args.dry_run and not args.fixtures:
         ap.error("--dry-run needs --fixtures")
-    if args.allow_rfc2142 and args.segment != "A":
-        ap.error("--allow-rfc2142 applies to segment A only")
+    if args.priority and args.segment != "A":
+        ap.error("--priority applies to segment A only")
     fetcher: Fetcher = FixtureFetcher(args.fixtures) if args.dry_run else LiveFetcher()
     rows, stats = run(
         WorkDir(args.workdir),
         args.segment,
         fetcher,
         priorities=args.priority or ("P1", "P2", "P3"),
-        allow_rfc2142=args.allow_rfc2142,
         suppress=load_suppression(args.suppress),
         extra_platforms=args.platform_suffix,
         limit=args.limit,
+        p4_hand_check=args.p4_hand_check,
     )
     write_csv(rows, args.out)
     print(json.dumps({"segment": args.segment, "out": str(args.out), **stats}, indent=2), file=sys.stderr)

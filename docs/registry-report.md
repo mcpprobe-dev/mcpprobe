@@ -309,18 +309,21 @@ fields is set; it then stays with `priority: null` until you close it.
 1. **Confirm first.** Check each queued host by hand with the same passive requests, for
    example `mcpprobe <url> --only AUTH-01 --only META-01 -v`. Do not run active checks
    and do not call tools. Anything you cannot confirm passively is dropped.
-2. **Find a contact**, in this order:
-   - `https://<host>/.well-known/security.txt`;
-   - `security@<domain>`;
-   - the security policy or maintainer listed in the registry entry's repository;
+2. **Find a published contact**, in this order. Never guess an address (no
+   `security@<domain>` without a published source):
+   - `https://<host>/.well-known/security.txt`, then the organisation domain's;
+   - the security policy (`SECURITY.md`) in the registry entry's repository;
+   - the security or contact page on the entry's website;
    - the registry maintainers, as a last resort (for a server with no reachable owner,
      or one that looks malicious; the registry's moderation can act on those).
 
    `scripts/outreach_contacts.py --segment A` does the published-channel part of this
-   (security.txt, the repository's SECURITY.md, the entry's website) and writes a PRIVATE
-   CSV with the source and date of each contact. It guesses `security@<domain>` only with
-   `--allow-rfc2142`, and marks such rows not eligible until you decide. `--dry-run
-   --fixtures DIR` fetches nothing.
+   and writes a PRIVATE CSV with the source and date of each contact. It prefers role
+   addresses; a named address is used only when the operator published it as the
+   security contact in security.txt or SECURITY.md and no security role address is given
+   there (`address_kind=named`). P4 is refused unless `--p4-hand-check` shows a manual
+   check of at least 50 P4 hosts with at least 90% correct. `--dry-run --fixtures DIR`
+   fetches nothing.
 3. **Send a private report.** State what was observed, the date, the check ID, the fix
    text from CHECKS.md, and that the scan was passive and called no tool. Link the
    scanning policy. Do not send anything a third party could misuse in transit: keep
