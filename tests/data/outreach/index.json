@@ -1,0 +1,9 @@
+{
+  "https://acme.example/.well-known/security.txt": {"file": "acme-security.txt"},
+  "https://old.stale.example/.well-known/security.txt": {"file": "stale-security.txt"},
+  "https://bigco.example/.well-known/security.txt": {"file": "bigco-security.txt"},
+  "https://raw.githubusercontent.com/dev42/poison/HEAD/.github/SECURITY.md": {"file": "dev42-SECURITY.md"},
+  "https://raw.githubusercontent.com/hobbyist/tool/HEAD/SECURITY.md": {"file": "hobbyist-SECURITY.md"},
+  "https://widgets.example": {"file": "widgets-home.html"},
+  "https://bigco.example/contact": {"file": "bigco-contact.html"}
+}

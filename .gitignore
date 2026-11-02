@@ -10,3 +10,6 @@ build/
 venv/
 mcpprobe-report*/
 *.mcpprobe-baseline.json
+
+# Outreach contact lists (scripts/outreach_contacts.py): private, never committed
+PRIVATE-*

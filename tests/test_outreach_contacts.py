@@ -1,0 +1,266 @@
+"""Contact discovery for post-survey outreach (scripts/outreach_contacts.py).
+
+Dry run only: every test runs with the network blocked, and the fetcher reads fixtures.
+"""
+
+from __future__ import annotations
+
+import csv
+import importlib.util
+import json
+import socket
+import subprocess
+import sys
+from datetime import UTC, datetime
+from pathlib import Path
+
+import httpx
+import pytest
+
+from mcpprobe.checks.poisoning import RULES_VERSION as META01_RULES
+from mcpprobe.registry.common import WorkDir
+
+ROOT = Path(__file__).resolve().parents[1]
+FIXTURES = ROOT / "tests" / "data" / "outreach"
+NOW = datetime(2026, 11, 3, 12, 0, tzinfo=UTC)
+
+_spec = importlib.util.spec_from_file_location("outreach_contacts", ROOT / "scripts" / "outreach_contacts.py")
+oc = importlib.util.module_from_spec(_spec)
+sys.modules["outreach_contacts"] = oc
+_spec.loader.exec_module(oc)
+
+
+@pytest.fixture(autouse=True)
+def no_network(monkeypatch):
+    def refuse(*a, **k):
+        raise AssertionError("a test tried to use the network")
+
+    monkeypatch.setattr(httpx.Client, "send", refuse)
+    monkeypatch.setattr(httpx.AsyncClient, "send", refuse)
+    monkeypatch.setattr(socket.socket, "connect", refuse)
+    monkeypatch.setattr(socket, "create_connection", refuse)
+    monkeypatch.setattr(socket, "getaddrinfo", refuse)
+
+
+OPEN = {
+    "AUTH-01": "critical",
+    "AUTH-02": "n_a",
+    "META-01": "passed",
+    "META-03": "medium",
+    "META-05": "passed",
+    "META-07": "passed",
+}
+LOCKED = {
+    "AUTH-01": "passed",
+    "AUTH-02": "medium",
+    "META-01": "blocked",
+    "META-03": "blocked",
+    "META-05": "blocked",
+    "META-07": "blocked",
+}
+
+
+def rec(host, entry, **outcomes):
+    base = dict(LOCKED if outcomes.pop("locked", False) else OPEN)
+    base.update({k.replace("_", "-"): v for k, v in outcomes.items()})
+    return {
+        "host": host,
+        "url": f"https://{host}/mcp",
+        "status": "scanned",
+        "entries": [entry],
+        "outcomes": base,
+        "meta01_rules": META01_RULES,
+        "finished_at": "2026-11-01T10:00:00+00:00",
+    }
+
+
+RECORDS = [
+    rec("p1.acme.example", "example.acme/p1", META_05="high"),
+    rec("docs.acme.example", "example.acme/docs"),  # clean, but its organisation is in A
+    rec("poison.tenant.vercel.app", "io.github.dev42/poison", META_01="high"),
+    rec("trifecta.example.net", "net.example/trifecta", META_07="medium"),
+    rec("old.stale.example", "example.stale/old", META_03="high"),
+    rec("clean.widgets.example", "example.widgets/clean"),
+    rec("free.hobby.example", "io.github.hobbyist/tool"),
+    rec("locked.bigco.example", "example.bigco/locked", locked=True),
+]
+SERVERS = {
+    "io.github.dev42/poison": {"repository": {"url": "https://github.com/dev42/poison", "source": "github"}},
+    "io.github.hobbyist/tool": {
+        "repository": {"url": "https://github.com/hobbyist/tool", "source": "github"}
+    },
+    "example.widgets/clean": {"websiteUrl": "https://widgets.example"},
+    "example.bigco/locked": {"websiteUrl": "https://bigco.example"},
+}
+
+
+@pytest.fixture
+def wd(tmp_path):
+    w = WorkDir(tmp_path / "work").ensure()
+    w.scan.write_text("".join(json.dumps(r) + "\n" for r in RECORDS))
+    w.pages.mkdir()
+    servers = [{"server": {"name": name, **extra}} for name, extra in SERVERS.items()]
+    (w.pages / "page-1.json").write_text(json.dumps({"servers": servers, "metadata": {}}))
+    return w
+
+
+def run(wd, segment, **kw):
+    fetcher = oc.FixtureFetcher(FIXTURES)
+    rows, stats = oc.run(wd, segment, fetcher, now=NOW, **kw)
+    return rows, stats, fetcher
+
+
+def by_org(rows):
+    return {r["org"]: r for r in rows}
+
+
+def test_segment_a_uses_published_security_contacts_with_source_and_date(wd):
+    rows, stats, fetcher = run(wd, "A")
+    orgs = by_org(rows)
+    assert set(orgs) == {"acme.example", "io.github.dev42", "stale.example"}  # P4 not included by default
+    acme = orgs["acme.example"]
+    assert acme["contact"] == "security@acme.example"
+    assert acme["source"] == "security.txt (organisation domain)"
+    assert acme["source_url"] == "https://acme.example/.well-known/security.txt"
+    assert acme["retrieved_at"] == "2026-11-03T12:00:00+00:00"
+    assert acme["priority"] == "P1" and acme["eligible"] == "true" and acme["subscriber_type"] == "corporate"
+    dev = orgs["io.github.dev42"]
+    assert dev["contact"] == "security@dev42.example"
+    assert dev["source_url"].endswith("/dev42/poison/HEAD/.github/SECURITY.md")
+    assert (
+        dev["subscriber_type"] == "individual_or_unknown" and dev["eligible"] == "true"
+    )  # disclosure is not marketing
+    stale = orgs["stale.example"]
+    assert stale["contact"] == "" and stale["eligible"] == "false"
+    assert "expired" in stale["notes"]
+    # A shared platform's security.txt belongs to the platform, never to the tenant.
+    assert "https://poison.tenant.vercel.app/.well-known/security.txt" not in fetcher.requested
+    assert stats["withheld_non_role_addresses"] == 2
+
+
+def test_personal_addresses_are_never_recorded(wd, tmp_path):
+    out = tmp_path / "PRIVATE-contacts.csv"
+    for segment in ("A", "B", "C"):
+        rows, _, _ = run(wd, segment)
+        oc.write_csv(rows, out)
+        text = out.read_text()
+        for personal in ("jane.doe@acme.example", "dev42.personal@gmail.com", "jane@widgets.example"):
+            assert personal not in text
+
+
+def test_p4_only_when_asked(wd):
+    rows, _, _ = run(wd, "A", priorities=("P4",))
+    assert [r["org"] for r in rows] == ["example.net"]
+
+
+def test_rfc2142_guess_is_opt_in_and_never_eligible(wd):
+    rows, _, _ = run(wd, "A", allow_rfc2142=True)
+    stale = by_org(rows)["stale.example"]
+    assert stale["contact"] == "security@stale.example"
+    assert stale["source"] == "rfc2142 (unverified)" and stale["eligible"] == "false"
+
+
+def test_segment_b_marketing_is_corporate_role_addresses_only_and_excludes_a(wd):
+    rows, stats, _ = run(wd, "B")
+    orgs = by_org(rows)
+    assert "acme.example" not in orgs and stats["orgs_excluded_in_A"] == 1
+    w = orgs["widgets.example"]
+    assert w["contact"] == "hello@widgets.example" and w["source"] == "website"
+    assert w["subscriber_type"] == "corporate" and w["eligible"] == "true"
+    hob = orgs["hobby.example"]  # personal GitHub namespace on its own domain
+    assert hob["contact"] == "hello@gmail.com" and hob["eligible"] == "false"
+    assert "PECR" in hob["notes"]
+
+
+def test_segment_c_never_uses_security_addresses_for_marketing(wd):
+    rows, _, _ = run(wd, "C")
+    [row] = rows
+    assert row["org"] == "bigco.example"
+    assert row["contact"] == "info@bigco.example"
+    assert row["source_url"] == "https://bigco.example/contact"
+    assert "AUTH-02 medium" in row["notes"]
+    assert all(not r["contact"].startswith("security@") for r in rows)
+
+
+def test_suppression_by_address_hash_or_domain(wd):
+    import hashlib
+
+    h = hashlib.sha256(b"hello@widgets.example").hexdigest()
+    for key in ("hello@widgets.example", h, "widgets.example"):
+        rows, stats, _ = run(wd, "B", suppress={key})
+        assert by_org(rows)["widgets.example"]["eligible"] == "false"
+        assert stats["suppressed"] == 1
+
+
+def test_cli_dry_run_writes_private_csv(wd, tmp_path, capsys):
+    out = tmp_path / "out" / "PRIVATE-contacts-A.csv"
+    assert (
+        oc.main(
+            [
+                "--workdir",
+                str(wd.root),
+                "--segment",
+                "A",
+                "--dry-run",
+                "--fixtures",
+                str(FIXTURES),
+                "--out",
+                str(out),
+            ]
+        )
+        == 0
+    )
+    rows = list(csv.DictReader(out.open()))
+    assert tuple(rows[0]) == oc.CSV_FIELDS
+    assert oct(out.stat().st_mode & 0o777) == "0o600"
+    assert json.loads(capsys.readouterr().err)["orgs"] == 3
+
+
+def test_cli_needs_an_explicit_mode(wd, tmp_path):
+    with pytest.raises(SystemExit):
+        oc.main(["--workdir", str(wd.root), "--segment", "A", "--out", str(tmp_path / "x.csv")])
+    with pytest.raises(SystemExit):
+        oc.main(
+            [
+                "--workdir",
+                str(wd.root),
+                "--segment",
+                "B",
+                "--dry-run",
+                "--fixtures",
+                str(FIXTURES),
+                "--allow-rfc2142",
+                "--out",
+                str(tmp_path / "x.csv"),
+            ]
+        )
+
+
+def test_refuses_to_write_into_a_git_tree_unless_ignored(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    (repo / ".gitignore").write_text("PRIVATE-*\n")
+    with pytest.raises(SystemExit, match="refusing"):
+        oc.write_csv([], repo / "contacts.csv")
+    oc.write_csv([], repo / "PRIVATE-contacts.csv")
+    assert (repo / "PRIVATE-contacts.csv").exists()
+
+
+@pytest.mark.parametrize(
+    ("host", "expected"),
+    [
+        ("mcp.example.co.uk", "example.co.uk"),
+        ("a.b.example.com", "example.com"),
+        ("example.org", "example.org"),
+    ],
+)
+def test_registrable_domain(host, expected):
+    assert oc.registrable_domain(host) == expected
+
+
+def test_security_txt_rules():
+    good = "Contact: mailto:security@x.example\nExpires: 2027-01-01T00:00:00Z\n"
+    assert oc.parse_security_txt(good, NOW) == (["security@x.example"], [], None)
+    assert oc.parse_security_txt("Contact: mailto:a@x.example\n", NOW)[2] == "no Expires field"
+    assert oc.parse_security_txt("Expires: 2027-01-01T00:00:00Z\n", NOW)[2] == "no Contact field"

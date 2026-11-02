@@ -1,0 +1,6 @@
+# Security contact for acme.example
+Contact: mailto:security@acme.example
+Contact: mailto:jane.doe@acme.example
+Expires: 2027-06-30T00:00:00Z
+Preferred-Languages: en
+Canonical: https://acme.example/.well-known/security.txt

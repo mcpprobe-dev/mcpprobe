@@ -315,6 +315,12 @@ fields is set; it then stays with `priority: null` until you close it.
    - the security policy or maintainer listed in the registry entry's repository;
    - the registry maintainers, as a last resort (for a server with no reachable owner,
      or one that looks malicious; the registry's moderation can act on those).
+
+   `scripts/outreach_contacts.py --segment A` does the published-channel part of this
+   (security.txt, the repository's SECURITY.md, the entry's website) and writes a PRIVATE
+   CSV with the source and date of each contact. It guesses `security@<domain>` only with
+   `--allow-rfc2142`, and marks such rows not eligible until you decide. `--dry-run
+   --fixtures DIR` fetches nothing.
 3. **Send a private report.** State what was observed, the date, the check ID, the fix
    text from CHECKS.md, and that the scan was passive and called no tool. Link the
    scanning policy. Do not send anything a third party could misuse in transit: keep
