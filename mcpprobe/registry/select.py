@@ -89,7 +89,12 @@ def select_targets(
     *,
     max_urls_per_host: int = 1,
 ) -> Selection:
-    """One target per host (streamable-http preferred over SSE); every decision counted."""
+    """One target per host (streamable-http preferred over SSE); every decision counted.
+
+    Every remote URL ends up either selected or under exactly one reason in ``excluded``, so
+    ``remote_urls - sum(excluded) == selected_urls``, and with ``max_urls_per_host=1``
+    ``selected_urls == unique_hosts``.
+    """
     exclusions = exclusions or Exclusions()
     sel = Selection()
     by_host: dict[str, dict[str, Any]] = {}
@@ -130,6 +135,9 @@ def select_targets(
             if entry["name"] not in target["entries"]:
                 target["entries"].append(entry["name"])
             if url in target["urls"]:
+                # The same URL listed again (another entry, version or transport): count it,
+                # or the funnel would not add up (remote_urls - excluded != selected URLs).
+                sel.excluded["duplicate_url"] += 1
                 continue
             if len(target["urls"]) >= max_urls_per_host:
                 sel.excluded["duplicate_host"] += 1
@@ -146,6 +154,7 @@ def select_targets(
         "no_remote_no_package_entries": kinds["no_remote_no_package"],
         "remote_urls": remote_urls,
         "excluded": dict(sorted(sel.excluded.items())),
+        "selected_urls": sum(len(t["urls"]) for t in sel.targets),
         "unique_hosts": len(sel.targets),
         "rate_keys": len({t["rate_key"] for t in sel.targets}),
         "max_urls_per_host": max_urls_per_host,

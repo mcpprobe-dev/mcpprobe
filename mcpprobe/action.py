@@ -6,8 +6,8 @@ always writes SARIF, records outputs in ``$GITHUB_OUTPUT``, writes a job
 summary to ``$GITHUB_STEP_SUMMARY``, emits one workflow annotation that names
 the outcome, and exits with the scanner's exit code:
 
-- 0 clean (no finding at or above ``fail-on``)
-- 1 findings at or above ``fail-on``
+- 0 clean (no finding or attack chain at or above ``fail-on``)
+- 1 a finding or attack chain at or above ``fail-on``
 - 2 error (unreachable target, bad input, opt-out, authorisation refused)
 - 3 the target answered but is not an MCP server (wrong URL or path)
 
@@ -89,19 +89,49 @@ def sarif_counts(path: Path) -> dict[str, int]:
     return counts
 
 
-def describe(code: int, target: str, fail_on: str, counts: Mapping[str, int]) -> tuple[str, str, str]:
+def sarif_chain_counts(path: Path) -> dict[str, int]:
+    """Count attack chains (``runs[].properties.chains``) per severity; empty when unreadable.
+
+    Chains are not SARIF results: each one is built from findings that are already
+    results, so they are counted on their own.
+    """
+    counts = dict.fromkeys(_SEVERITIES, 0)
+    try:
+        data: Any = json.loads(path.read_text(encoding="utf-8"))
+        for run in data.get("runs", []):
+            for chain in run.get("properties", {}).get("chains", []):
+                sev = str(chain.get("severity", "info"))
+                counts[sev if sev in counts else "info"] += 1
+    except (OSError, ValueError, AttributeError):
+        return {}
+    return counts
+
+
+def describe(
+    code: int,
+    target: str,
+    fail_on: str,
+    counts: Mapping[str, int],
+    chain_counts: Mapping[str, int] | None = None,
+) -> tuple[str, str, str]:
     """Return (annotation level, title, message) for an exit code."""
     total = sum(counts.values())
     breakdown = ", ".join(f"{counts[s]} {s}" for s in _SEVERITIES if counts.get(s))
+    chain_counts = chain_counts or {}
+    chains = sum(chain_counts.values())
+    chain_breakdown = ", ".join(f"{chain_counts[s]} {s}" for s in _SEVERITIES if chain_counts.get(s))
+    chain_text = f" and {chains} attack chain(s) built from them ({chain_breakdown})" if chains else ""
     if code == EXIT_CLEAN:
-        found = f" ({breakdown} below the threshold)" if breakdown else ""
-        return "notice", "mcpprobe: passed", f"No finding at or above '{fail_on}' on {target}{found}."
+        below = ", ".join(x for x in (breakdown, f"attack chains: {chain_breakdown}" if chains else "") if x)
+        found = f" ({below} below the threshold)" if below else ""
+        what = "finding or attack chain" if chains else "finding"
+        return "notice", "mcpprobe: passed", f"No {what} at or above '{fail_on}' on {target}{found}."
     if code == EXIT_FINDINGS:
         return (
             "error",
             "mcpprobe: findings",
-            f"{total} finding(s) on {target} ({breakdown}); at least one is at or above '{fail_on}'. "
-            "See the job summary or the code scanning alerts.",
+            f"{total} finding(s) on {target} ({breakdown}){chain_text}; at least one is at or above "
+            f"'{fail_on}'. See the job summary or the code scanning alerts.",
         )
     if code == EXIT_NOT_MCP:
         return (
@@ -119,7 +149,14 @@ def describe(code: int, target: str, fail_on: str, counts: Mapping[str, int]) ->
     )
 
 
-def _summary(code: int, target: str, fail_on: str, counts: Mapping[str, int], message: str) -> str:
+def _summary(
+    code: int,
+    target: str,
+    fail_on: str,
+    counts: Mapping[str, int],
+    message: str,
+    chain_counts: Mapping[str, int] | None = None,
+) -> str:
     lines = [
         "## mcpprobe MCP security scan",
         "",
@@ -130,8 +167,13 @@ def _summary(code: int, target: str, fail_on: str, counts: Mapping[str, int], me
         "",
     ]
     if code in (EXIT_CLEAN, EXIT_FINDINGS) and counts:
-        lines += ["| Severity | Findings |", "|---|---|"]
-        lines += [f"| {s} | {counts[s]} |" for s in _SEVERITIES]
+        if chain_counts and sum(chain_counts.values()):
+            lines += ["| Severity | Findings | Attack chains |", "|---|---|---|"]
+            lines += [f"| {s} | {counts[s]} | {chain_counts.get(s, 0)} |" for s in _SEVERITIES]
+            lines += ["", "Each attack chain is built from findings counted in the Findings column."]
+        else:
+            lines += ["| Severity | Findings |", "|---|---|"]
+            lines += [f"| {s} | {counts[s]} |" for s in _SEVERITIES]
         lines.append("")
     lines.append(
         "Docs: https://mcpprobe.tech · checks: https://github.com/mcpprobe-dev/mcpprobe/blob/main/CHECKS.md"
@@ -157,7 +199,8 @@ def run(env: Mapping[str, str] | None = None) -> int:
     fail_on = argv[argv.index("--fail-on") + 1]
     sarif = argv[argv.index("--sarif") + 1]
     counts = sarif_counts(Path(sarif))
-    level, title, message = describe(code, target, fail_on, counts)
+    chain_counts = sarif_chain_counts(Path(sarif))
+    level, title, message = describe(code, target, fail_on, counts, chain_counts)
     print(f"::{level} title={_escape_property(title)}::{_escape(message)}", file=sys.stderr)
     out = env.get("GITHUB_OUTPUT")
     if out:
@@ -168,7 +211,7 @@ def run(env: Mapping[str, str] | None = None) -> int:
     summary = env.get("GITHUB_STEP_SUMMARY")
     if summary:
         with Path(summary).open("a", encoding="utf-8") as fh:
-            fh.write(_summary(code, target, fail_on, counts, message))
+            fh.write(_summary(code, target, fail_on, counts, message, chain_counts))
     return code
 
 

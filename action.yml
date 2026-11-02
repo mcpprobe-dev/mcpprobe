@@ -10,7 +10,7 @@ inputs:
     description: "MCP endpoint URL to scan (Streamable HTTP). Only scan servers you own or are authorised to test."
     required: true
   fail-on:
-    description: "Fail the step when a finding is at or above this severity: info, low, medium, high, critical."
+    description: "Fail the step when a finding or attack chain is at or above this severity: info, low, medium, high, critical."
     required: false
     default: "high"
   rate:
@@ -46,7 +46,7 @@ outputs:
   sarif-file:
     description: "Path of the SARIF file that was written (empty if none was written)."
   exit-code:
-    description: "mcpprobe exit code: 0 clean, 1 findings at or above fail-on, 2 error (unreachable, bad input, opt-out), 3 the target is not an MCP server."
+    description: "mcpprobe exit code: 0 clean, 1 a finding or attack chain at or above fail-on, 2 error (unreachable, bad input, opt-out), 3 the target is not an MCP server."
   result:
     description: "Outcome as a word: clean, findings, error or not-mcp. Upload SARIF only for clean or findings; the other two have no results and would close open alerts."
 

@@ -346,10 +346,21 @@ class ScanReport(BaseModel):
     notes: list[str] = Field(default_factory=list)
 
     def counts(self) -> dict[str, int]:
-        """Number of findings per severity (all five keys always present)."""
+        """Number of findings per severity (all five keys always present).
+
+        Attack chains are not findings: each one is built from findings already
+        counted here, so they are counted separately by :meth:`chain_counts`.
+        """
         out = {s.value: 0 for s in _SEVERITY_ORDER}
         for f in self.findings:
             out[f.severity.value] += 1
+        return out
+
+    def chain_counts(self) -> dict[str, int]:
+        """Number of attack chains per severity (all five keys always present)."""
+        out = {s.value: 0 for s in _SEVERITY_ORDER}
+        for c in self.chains:
+            out[c.severity.value] += 1
         return out
 
     def coverage(self) -> dict[str, int]:
@@ -370,7 +381,18 @@ class ScanReport(BaseModel):
         return out
 
     def max_severity(self) -> Severity | None:
-        """Highest severity present, or ``None`` when there are no findings."""
+        """Highest severity of any finding or attack chain, or ``None`` when there is neither.
+
+        A chain can be rated above every finding it is built from (CHAIN-01 is critical
+        while AUTH-01 and META-03 are high), so it takes part in the pass/fail decision.
+        """
+        sevs = [f.severity for f in self.findings] + [c.severity for c in self.chains]
+        if not sevs:
+            return None
+        return max(sevs, key=lambda s: s.rank)
+
+    def findings_max_severity(self) -> Severity | None:
+        """Highest severity among findings only, or ``None`` when there are no findings."""
         if not self.findings:
             return None
         return max((f.severity for f in self.findings), key=lambda s: s.rank)

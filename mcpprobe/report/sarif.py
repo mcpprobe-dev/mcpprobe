@@ -194,6 +194,7 @@ def to_sarif(report: ScanReport, *, location_uri: str | None = None) -> dict[str
                 "mode": report.mode.value,
                 "fingerprint": report.fingerprint.model_dump(mode="json") if report.fingerprint else None,
                 "counts": report.counts(),
+                "chainCounts": report.chain_counts(),
                 "targetKind": report.target_kind,
                 # Only checks that ran and found nothing are passes; not_applicable is not a pass.
                 "coverage": report.coverage(),

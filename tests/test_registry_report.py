@@ -253,6 +253,41 @@ def test_select_exclusion_list_and_local_names():
     assert sel.summary["package_only_entries"] == 1
 
 
+def test_select_funnel_adds_up_with_repeated_urls():
+    """remote_urls - sum(excluded) == unique_hosts: a repeated URL is counted, not dropped silently."""
+    same = "https://same.example.com/mcp"
+    entries = [
+        {"name": "b/1", "remotes": [{"type": "streamable-http", "url": same}]},
+        # The same URL listed by a second entry, and again as SSE by a third.
+        {"name": "b/2", "remotes": [{"type": "streamable-http", "url": same}]},
+        {"name": "b/3", "remotes": [{"type": "streamable-http", "url": same}, {"type": "sse", "url": same}]},
+        # Another URL on a host already selected.
+        {"name": "b/4", "remotes": [{"type": "sse", "url": "https://same.example.com/sse"}]},
+        {"name": "b/5", "remotes": [{"type": "streamable-http", "url": "https://other.example.net/mcp"}]},
+        {"name": "b/6", "remotes": [{"type": "streamable-http", "url": "https://{tenant}.example.com/mcp"}]},
+        {"name": "b/7", "remotes": [{"type": "streamable-http", "url": "http://10.0.0.1/mcp"}]},
+        {"name": "b/8", "remotes": [{"type": "streamable-http", "url": "https://svc.local/mcp"}]},
+    ]
+    s = select_targets(entries).summary
+    assert s["remote_urls"] == 9
+    assert s["excluded"] == {
+        "duplicate_url": 3,
+        "duplicate_host": 1,
+        "templated_url": 1,
+        "ip_literal": 1,
+        "local_name": 1,
+    }
+    assert s["unique_hosts"] == s["selected_urls"] == 2
+    assert s["remote_urls"] - sum(s["excluded"].values()) == s["unique_hosts"]
+    same_target = next(t for t in select_targets(entries).targets if t["host"] == "same.example.com")
+    assert same_target["entries"] == ["b/1", "b/2", "b/3", "b/4"]
+
+
+def test_select_funnel_adds_up_on_fixture_registry(pipeline):
+    s = pipeline["res"].selection.summary
+    assert s["remote_urls"] - sum(s["excluded"].values()) == s["unique_hosts"] == s["selected_urls"]
+
+
 def test_static_checks_on_registry_tool_definitions(pipeline):
     static = {r["name"]: r for r in read_jsonl(pipeline["wd"].static)}
     assert len(static) == 10

@@ -6,6 +6,33 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-11-02
+
+Two counting fixes. Nothing about what the checks detect has changed.
+
+### Fixed
+
+- Attack chains were left out of the summary counts and the pass/fail decision. A scan
+  could list a CRITICAL `CHAIN-01` while the summary line said "critical 0", and
+  `--fail-on critical` passed (exit 0) because no single finding was critical. The
+  terminal now prints a second count line for attack chains under the findings line, for
+  example `Attack chains  critical 1  high 1 ... (2 chains, built from the findings counted
+  above)`. Chains are counted on their own line, not added to the findings counts, because
+  each chain is made of findings that are already counted. The exit code and the
+  `Result:` line now take chains into account, and the `Result:` line says whether
+  findings, attack chains or both reached the threshold.
+- The JSON summary has a new `chain_counts` field and a `findings_max_severity` field;
+  `max_severity` is now the worst of findings and attack chains (the value the exit code
+  uses). SARIF run properties have a new `chainCounts`. `counts` is unchanged: findings
+  only, one per SARIF result.
+- The GitHub Action's annotation and job summary mention attack chains and show them in
+  their own column.
+- Registry survey funnel: a remote URL listed more than once (by a second entry, or as
+  both streamable-http and SSE) was dropped without being counted, so `remote_urls` minus
+  the exclusions did not equal `unique_hosts` (36,687 - 9,976 = 26,711, not 26,617). These
+  are now counted as `duplicate_url`, the summary has `selected_urls`, and the funnel adds
+  up exactly. Re-run `reaggregate` to correct an existing `aggregates.json`.
+
 ## [0.3.1] - 2026-11-01
 
 Fewer false tool-poisoning alarms. META-01 (tool poisoning) was flagging ordinary

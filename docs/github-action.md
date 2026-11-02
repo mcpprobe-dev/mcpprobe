@@ -32,7 +32,7 @@ jobs:
 
       - name: Scan the MCP server
         id: scan
-        uses: mcpprobe-dev/mcpprobe@v0.3.1
+        uses: mcpprobe-dev/mcpprobe@v0.3.2
         with:
           target: https://staging.your-server.example/mcp
           fail-on: high
@@ -61,7 +61,7 @@ A manually triggered version with a URL input lives in
 | Input | Required | Default | Meaning |
 |---|---|---|---|
 | `target` | yes | | MCP endpoint URL (Streamable HTTP), for example `https://staging.example.com/mcp`. |
-| `fail-on` | no | `high` | Fail the step when any finding is at or above this severity: `info`, `low`, `medium`, `high`, `critical`. |
+| `fail-on` | no | `high` | Fail the step when any finding or attack chain is at or above this severity: `info`, `low`, `medium`, `high`, `critical`. |
 | `rate` | no | `5` | Maximum requests per second, 0.1 to 10 (10 is a hard ceiling). |
 | `sarif-output` | no | `mcpprobe.sarif` | Where to write SARIF 2.1.0, relative to the workspace. |
 | `sarif-location` | no | target URL | Repository file to anchor results to. Without it, results point at the endpoint URL, which code scanning shows without a file link. |
@@ -82,8 +82,8 @@ A manually triggered version with a URL input lives in
 
 | Code | `result` | Meaning | What to do |
 |---|---|---|---|
-| `0` | `clean` | No finding at or above `fail-on`. Lower findings are still in the SARIF. | Upload SARIF. |
-| `1` | `findings` | At least one finding at or above `fail-on`. | Upload SARIF; fix or triage the alerts. |
+| `0` | `clean` | No finding or attack chain at or above `fail-on`. Lower findings are still in the SARIF. | Upload SARIF. |
+| `1` | `findings` | At least one finding or attack chain at or above `fail-on`. | Upload SARIF; fix or triage the alerts. |
 | `2` | `error` | Target unreachable, bad input, the target opted out, or authorisation refused. | Read the step log. Do not upload. |
 | `3` | `not-mcp` | The URL answered, but not as an MCP server (for example an HTML page or the wrong path). Nothing was checked and nothing passed. | Fix the URL or the deployment. Do not upload. |
 
@@ -109,7 +109,7 @@ notifications on the analysis, never as passes.
 - **Reachability.** The container runs on the runner's Docker network, so
   `127.0.0.1` inside it is not the runner. To scan a server started earlier in the
   same job, use the CLI instead of the Action:
-  `pipx run --spec mcpprobe-scanner==0.3.1 mcpprobe http://127.0.0.1:8000/mcp --sarif mcpprobe.sarif`.
+  `pipx run --spec mcpprobe-scanner==0.3.2 mcpprobe http://127.0.0.1:8000/mcp --sarif mcpprobe.sarif`.
   For a remote target, it must be reachable from GitHub-hosted runners.
 - **Private repositories** need GitHub Code Security (Advanced Security) for code
   scanning uploads. Without it, keep the scan step as the gate and save
@@ -121,6 +121,6 @@ notifications on the analysis, never as passes.
   plans to deprecate v3; `upload-sarif@v4` takes the same inputs. Switch when your
   organisation does.
 - **Active mode** (`extra-args: --active ...`) also needs `--authorised-by`,
-  `--scope` and `--verify dns-txt`; see the README. In 0.3.1 the active checks are
+  `--scope` and `--verify dns-txt`; see the README. In 0.3.2 the active checks are
   stubs.
-- **Pin a version.** Use `@v0.3.1` (or a full commit SHA), not `@main`.
+- **Pin a version.** Use `@v0.3.2` (or a full commit SHA), not `@main`.

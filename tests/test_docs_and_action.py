@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
-from mcpprobe.action import build_argv, describe, run
+from mcpprobe.action import _summary, build_argv, describe, run, sarif_chain_counts, sarif_counts
 from mcpprobe.catalogue import checks_markdown
 from mcpprobe.checks import ALL_CHECKS
 from mcpprobe.cli import EXIT_CLEAN, EXIT_ERROR, EXIT_FINDINGS, EXIT_NOT_MCP, main
@@ -108,6 +109,40 @@ def test_action_describe_every_exit_code():
     assert (level, title) == ("error", "mcpprobe: findings") and "1 high, 2 medium" in message
     assert describe(EXIT_NOT_MCP, "u", "high", {})[1] == "mcpprobe: not an MCP server"
     assert describe(EXIT_ERROR, "u", "high", {})[1] == "mcpprobe: scan error"
+
+
+def test_action_counts_attack_chains_separately(tmp_path):
+    sarif = tmp_path / "r.sarif"
+    sarif.write_text(
+        json.dumps(
+            {
+                "runs": [
+                    {
+                        "results": [
+                            {"properties": {"severity": "high"}},
+                            {"properties": {"severity": "high"}},
+                        ],
+                        "properties": {"chains": [{"id": "CHAIN-01", "severity": "critical"}]},
+                    }
+                ]
+            }
+        )
+    )
+    counts, chains = sarif_counts(sarif), sarif_chain_counts(sarif)
+    assert counts["high"] == 2 and sum(counts.values()) == 2
+    assert chains["critical"] == 1 and sum(chains.values()) == 1
+    level, _, message = describe(EXIT_FINDINGS, "u", "critical", counts, chains)
+    assert level == "error"
+    assert "2 finding(s) on u (2 high) and 1 attack chain(s) built from them (1 critical)" in message
+    md = _summary(EXIT_FINDINGS, "u", "critical", counts, message, chains)
+    assert "| Severity | Findings | Attack chains |" in md and "| critical | 0 | 1 |" in md
+    assert "| high | 2 | 0 |" in md
+    _, _, clean = describe(EXIT_CLEAN, "u", "critical", {"high": 1}, {"high": 1})
+    assert (
+        clean
+        == "No finding or attack chain at or above 'critical' on u (1 high, attack chains: 1 high below the threshold)."
+    )
+    assert sarif_chain_counts(tmp_path / "missing.sarif") == {}
 
 
 def test_main_accepts_options_before_target():

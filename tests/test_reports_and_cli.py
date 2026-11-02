@@ -113,8 +113,11 @@ async def test_json_report_shape(make_server):
     async with make_server(preset="vulnerable") as srv:
         report = await run(srv.url)
     data = report_to_dict(report)
-    assert data["summary"]["max_severity"] == "high"
+    # CHAIN-01 is critical while every finding is at most high: the overall worst includes chains.
+    assert data["summary"]["max_severity"] == "critical"
+    assert data["summary"]["findings_max_severity"] == "high"
     assert sum(data["summary"]["counts"].values()) == len(data["findings"]) > 10
+    assert sum(data["summary"]["chain_counts"].values()) == len(data["chains"]) >= 1
     assert [a["id"] for a in data["attestations"]] == ["GOV-01", "GOV-02", "GOV-03", "GOV-04", "GOV-05"]
     assert all(a["status"] == "attestation-only" for a in data["attestations"])
     for f in data["findings"]:
@@ -214,9 +217,15 @@ def test_cli_exit_1_on_findings_and_writes_reports(live_server, tmp_path):
 
 
 def test_cli_fail_on_threshold(live_server):
+    # Every finding on loopback is at most high, so only the attack chains decide here.
     with live_server("vulnerable") as srv:
+        res = invoke("scan", srv.url, "--rate", "10", "--fail-on", "critical")
+    # 0.3.1 exited 0 here while listing a CRITICAL CHAIN-01; the exit code now counts chains.
+    assert res.exit_code == EXIT_FINDINGS, res.output
+    assert "Result: FAIL (attack chain at or above critical)" in res.output
+    with live_server("vulnerable", require_auth=True) as srv:
         res = invoke("scan", srv.url, "--rate", "10", "--fail-on", "critical", "-q")
-    assert res.exit_code == EXIT_CLEAN  # worst finding on loopback is high
+    assert res.exit_code == EXIT_CLEAN, res.output  # no AUTH-01, so no chain and nothing critical
 
 
 def test_cli_exit_0_clean(live_server):
@@ -354,3 +363,48 @@ def test_cli_token_command():
     res = invoke("token", "mcp.example.com")
     assert res.exit_code == 0
     assert "_mcpprobe.mcp.example.com.  TXT" in res.output and "mcpprobe-verification=" in res.output
+
+
+# ----------------------------------------------------------------------------- counts and chains
+async def test_counts_and_chains_consistent_across_outputs(make_server):
+    """Every severity the report lists is counted somewhere, the same way in every output."""
+    async with make_server(preset="vulnerable") as srv:
+        report = await run(srv.url)
+    assert any(c.id == "CHAIN-01" and c.severity == Severity.CRITICAL for c in report.chains)
+    assert all(f.severity < Severity.CRITICAL for f in report.findings)
+    counts, chain_counts = report.counts(), report.chain_counts()
+    for sev in Severity:
+        assert counts[sev.value] == sum(1 for f in report.findings if f.severity == sev)
+        assert chain_counts[sev.value] == sum(1 for c in report.chains if c.severity == sev)
+    assert chain_counts["critical"] >= 1
+    assert report.max_severity() == Severity.CRITICAL
+    assert report.findings_max_severity() == Severity.HIGH
+
+    data = report_to_dict(report)
+    assert data["summary"]["counts"] == counts and data["summary"]["chain_counts"] == chain_counts
+    sarif = to_sarif(report)
+    props = sarif["runs"][0]["properties"]
+    assert props["counts"] == counts and props["chainCounts"] == chain_counts
+    assert len(sarif["runs"][0]["results"]) == sum(counts.values())
+
+    console = Console(record=True, width=200)
+    render(report, console, fail_on=Severity.CRITICAL)
+    text = console.export_text()
+    findings_line = next(line for line in text.splitlines() if line.startswith("Findings"))
+    chains_line = next(line for line in text.splitlines() if line.startswith("Attack chains"))
+    for sev in Severity:
+        assert f" {sev.value} {counts[sev.value]} " in findings_line
+        assert f" {sev.value} {chain_counts[sev.value]} " in chains_line
+    assert f"({sum(counts.values())} findings)" in findings_line
+    # The chain is the only thing at critical, so the verdict must name it.
+    assert "Result: FAIL (attack chain at or above critical)" in text
+
+
+async def test_terminal_has_no_chain_line_without_chains(make_server):
+    async with make_server() as srv:
+        report = await run(srv.url, only=["META-04"])
+    assert report.chains == []
+    console = Console(record=True, width=200)
+    render(report, console, fail_on=Severity.HIGH)
+    text = console.export_text()
+    assert "Attack chains" not in text and "Result: PASS (nothing at or above high)" in text

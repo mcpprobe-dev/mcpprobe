@@ -2,8 +2,8 @@
 
 ``mcpprobe <target>`` is shorthand for ``mcpprobe scan <target>``.
 
-Exit codes: 0 = no findings at or above ``--fail-on``; 1 = findings at or
-above ``--fail-on``; 2 = error (unreachable target, opt-out, authorisation
+Exit codes: 0 = no finding or attack chain at or above ``--fail-on``; 1 = a
+finding or attack chain at or above ``--fail-on``; 2 = error (unreachable target, opt-out, authorisation
 refused, bad arguments).
 """
 
@@ -112,7 +112,7 @@ def _parse_kv(values: Sequence[str], what: str, sep: str) -> dict[str, str]:
     default="high",
     type=click.Choice(SEVERITIES),
     show_default=True,
-    help="Exit 1 if any finding is at or above this severity.",
+    help="Exit 1 if any finding or attack chain is at or above this severity.",
 )
 @click.option(
     "--json", "json_path", type=click.Path(dir_okay=False), help="Write the JSON report (with evidence) here."

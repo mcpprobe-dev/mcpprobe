@@ -93,6 +93,49 @@ def _finding_block(f: Finding, verbose: bool) -> Group:
     return Group(*lines)
 
 
+def _count_line(label: str, counts: dict[str, int], tail: str) -> Text:
+    line = Text(label)
+    for sev in _ORDER:
+        style = severity_style(sev, badge=True) if counts[sev.value] else "dim"
+        line.append(f" {sev.value} {counts[sev.value]} ", style=style)
+        line.append(" ")
+    line.append(tail, style="dim")
+    return line
+
+
+def summary_lines(report: ScanReport) -> list[Text]:
+    """The per-severity count lines: findings, then attack chains when there are any.
+
+    Chains are counted on their own line because each one is built from findings that
+    are already counted; adding them to the findings counts would count those twice.
+    """
+    counts = report.counts()
+    total = sum(counts.values())
+    if not report.chains:
+        return [_count_line("Findings ", counts, f"({total} {'finding' if total == 1 else 'findings'})")]
+    chain_counts = report.chain_counts()
+    n = sum(chain_counts.values())
+    return [
+        _count_line("Findings      ", counts, f"({total} {'finding' if total == 1 else 'findings'})"),
+        _count_line(
+            "Attack chains ",
+            chain_counts,
+            f"({n} {'chain' if n == 1 else 'chains'}, built from the findings counted above)",
+        ),
+    ]
+
+
+def fail_reason(report: ScanReport, fail_on: Severity) -> str:
+    """Why the result is FAIL: findings, attack chains, or both, at or above ``fail_on``."""
+    findings = any(f.severity >= fail_on for f in report.findings)
+    chains = any(c.severity >= fail_on for c in report.chains)
+    if findings and chains:
+        return f"findings and attack chains at or above {fail_on.value}"
+    if chains:
+        return f"attack chain at or above {fail_on.value}"
+    return f"findings at or above {fail_on.value}"
+
+
 def render(
     report: ScanReport,
     console: Console | None = None,
@@ -136,13 +179,8 @@ def render(
         console.print(Text("No check was run against this target; nothing passed.", style="dim"))
         return
 
-    counts = report.counts()
-    summary = Text("Findings ")
-    for sev in _ORDER:
-        style = severity_style(sev, badge=True) if counts[sev.value] else "dim"
-        summary.append(f" {sev.value} {counts[sev.value]} ", style=style)
-        summary.append(" ")
-    console.print(summary)
+    for line in summary_lines(report):
+        console.print(line)
     console.print()
 
     for chain in report.chains:
@@ -212,9 +250,7 @@ def render(
     if fail_on is not None:
         top = report.max_severity()
         if top is not None and top >= fail_on:
-            console.print(
-                Text(f"Result: FAIL (findings at or above {fail_on.value})", style=severity_style(top))
-            )
+            console.print(Text(f"Result: FAIL ({fail_reason(report, fail_on)})", style=severity_style(top)))
         else:
             console.print(
                 Text(f"Result: PASS (nothing at or above {fail_on.value})", style=f"bold {PASS_HEX}")

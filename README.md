@@ -139,8 +139,8 @@ process are in [docs/registry-report.md](docs/registry-report.md).
 
 | Code | Meaning |
 |---|---|
-| `0` | No finding at or above `--fail-on` (default `high`) |
-| `1` | At least one finding at or above `--fail-on` |
+| `0` | No finding or attack chain at or above `--fail-on` (default `high`) |
+| `1` | At least one finding or attack chain at or above `--fail-on` |
 | `2` | Error: target unreachable, bad arguments, ownership verification failed, authorisation refused, or the target opted out |
 | `3` | The target answered but is not an MCP server (for example an ordinary web site); every check is reported not applicable and nothing passes |
 
@@ -159,7 +159,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: mcpprobe-dev/mcpprobe@v0.3.1
+      - uses: mcpprobe-dev/mcpprobe@v0.3.2
         id: scan
         with:
           target: https://staging.your-server.example/mcp

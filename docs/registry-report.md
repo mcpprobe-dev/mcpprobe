@@ -47,6 +47,10 @@ These rules are in code, not in this document only. The tests in
   loopback, private, CGNAT, link-local or reserved address. The connection is pinned to
   the vetted address; TLS still verifies the hostname through SNI. IP-literal URLs,
   templated URLs (`{tenant}`) and local names are dropped before scanning.
+- **Funnel arithmetic.** Every listed remote URL is either selected or counted under exactly
+  one reason in `funnel.excluded` (`duplicate_host`: another URL on a host already selected;
+  `duplicate_url` *(0.3.2)*: the same URL listed again by another entry or transport), so
+  `remote_urls - sum(excluded) == selected_urls == unique_hosts` with one URL per host.
 - **Same origin only.** A request to any host other than the target is refused.
 - **Stop on refusal.** The first HTTP 429 or 403 stops all traffic to that rate key for
   the rest of the run and for resumed runs. `Retry-After` is not waited out.

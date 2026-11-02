@@ -13,10 +13,15 @@ from mcpprobe.transport import EvidenceLog
 def report_to_dict(report: ScanReport, evidence: EvidenceLog | None = None) -> dict[str, Any]:
     data: dict[str, Any] = report.model_dump(mode="json")
     worst = report.max_severity()
+    worst_finding = report.findings_max_severity()
     coverage = report.coverage()
     data["summary"] = {
+        # Findings only; chains are built from these findings and are counted separately.
         "counts": report.counts(),
+        "chain_counts": report.chain_counts(),
+        # Worst of findings and attack chains: the value the exit code is decided on.
         "max_severity": worst.value if worst is not None else None,
+        "findings_max_severity": worst_finding.value if worst_finding is not None else None,
         "target_kind": report.target_kind,
         # "passed" = ran and found nothing; not_applicable never counts as passed.
         "checks_passed": coverage["passed"],

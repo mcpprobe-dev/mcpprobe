@@ -2,7 +2,7 @@
 # GitHub code scanning. Runs only when started by hand (Actions tab -> "Example MCP scan"
 # -> Run workflow); it is not triggered by pushes or pull requests to this repository.
 #
-# In your own repository, replace `uses: ./` with `uses: mcpprobe-dev/mcpprobe@v0.3.1`
+# In your own repository, replace `uses: ./` with `uses: mcpprobe-dev/mcpprobe@v0.3.2`
 # (see docs/github-action.md). `./` runs the Action from this checkout so the example
 # always exercises the code on the branch it is started from.
 #

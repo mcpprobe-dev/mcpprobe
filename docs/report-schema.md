@@ -24,7 +24,7 @@ or removed.
 | `readiness` *(0.3)* | array | Directory listing readiness, see below. Always present (for `not_mcp`/`unreachable` every item is `not_assessable`). |
 | `attestations` | array | Governance items a scan cannot assess. |
 | `notes` | array of string | |
-| `summary` | object | `counts` per severity, `max_severity`, `target_kind`, `checks_passed`, `checks_with_findings`, `checks_not_applicable`, `checks_applicable`, `checks_ran`, `checks_skipped`, `checks_not_implemented`, `checks_error`. |
+| `summary` | object | `counts` per severity (findings only), `chain_counts` *(0.3.2, attack chains per severity; each chain is built from findings already in `counts`)*, `max_severity` (from 0.3.2 the worst of findings and chains, the value the exit code uses), `findings_max_severity` *(0.3.2)*, `target_kind`, `checks_passed`, `checks_with_findings`, `checks_not_applicable`, `checks_applicable`, `checks_ran`, `checks_skipped`, `checks_not_implemented`, `checks_error`. |
 | `evidence` | array | Every request/response pair. |
 
 ## `checks[]`
