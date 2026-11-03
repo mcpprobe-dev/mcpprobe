@@ -204,6 +204,7 @@ class Meta02RugPullBaseline(Check):
             out.append(
                 self.finding(
                     title="Tools removed since baseline",
+                    variant="removed",
                     description="Removed tools: " + ", ".join(tools["removed"]) + ".",
                     severity=Severity.INFO,
                     confidence=Confidence.HIGH,

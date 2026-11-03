@@ -401,7 +401,7 @@ class Auth03AuthorizationServerMetadata(Check):
                 "metadata is missing (AUTH-02).",
                 related_to="AUTH-02",
             )
-        servers = [s for s in prm.get("authorization_servers") or [] if isinstance(s, str)]
+        servers = list(dict.fromkeys(s for s in prm.get("authorization_servers") or [] if isinstance(s, str)))
         if not servers:
             raise NotApplicable(
                 "The protected resource metadata lists no authorization server (AUTH-02).",
@@ -501,6 +501,7 @@ class Auth03AuthorizationServerMetadata(Check):
                         confidence=Confidence.HIGH,
                         evidence=evidence_of(*responses),
                         location=issuer,
+                        variant="plain-http-endpoints",
                         details={"insecure_endpoints": insecure},
                         affected=insecure,
                         proof=doc_proof,
@@ -511,6 +512,7 @@ class Auth03AuthorizationServerMetadata(Check):
                 findings.append(
                     self.finding(
                         title="Authorization server issuer mismatch",
+                        variant="issuer-mismatch",
                         description=f"Metadata issuer {doc['issuer']!r} differs from advertised {issuer!r}.",
                         severity=Severity.LOW,
                         confidence=Confidence.MEDIUM,
@@ -625,6 +627,8 @@ class Auth04TokenAudienceAndPassthrough(Check):
                         else "The response was 2xx but carried no JSON-RPC result, so acceptance is inferred from the status only.",
                         evidence=evidence_of(resp),
                         location=ctx.target,
+                        # Both self-minted tokens can be accepted; the second needs its own uid.
+                        variant=None if label == "HS256/random-key" else "alg-none",
                         details={"probe": label, "claims": now_claims},
                         affected=[label],
                         proof=proof.exchange(

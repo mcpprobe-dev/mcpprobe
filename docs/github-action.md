@@ -32,7 +32,7 @@ jobs:
 
       - name: Scan the MCP server
         id: scan
-        uses: mcpprobe-dev/mcpprobe@v0.3.2
+        uses: mcpprobe-dev/mcpprobe@v0.3.3
         with:
           target: https://staging.your-server.example/mcp
           fail-on: high
@@ -100,8 +100,9 @@ known false positives, in text and Markdown), a `helpUri`, `security-severity`
 (critical 9.5, high 7.5, medium 5.0, low 2.5, info 0.5), and tags: `security`, `mcp`,
 the mode, and the OWASP MCP Top 10, Agentic (ASI) and LLM Top 10 IDs. Levels are
 `error` for critical and high, `warning` for medium, `note` for low and info. Each
-result carries a stable `partialFingerprints` key (check ID + target), so alerts stay
-the same across runs. Checks that were not applicable or skipped appear as tool
+result carries a stable `partialFingerprints` key (the finding's `uid`: check ID +
+location, plus a variant where one check reports several things at one location), so
+alerts stay the same across runs and no two results in one run share it. Checks that were not applicable or skipped appear as tool
 notifications on the analysis, never as passes.
 
 ## Limits and gotchas
@@ -109,7 +110,7 @@ notifications on the analysis, never as passes.
 - **Reachability.** The container runs on the runner's Docker network, so
   `127.0.0.1` inside it is not the runner. To scan a server started earlier in the
   same job, use the CLI instead of the Action:
-  `pipx run --spec mcpprobe-scanner==0.3.2 mcpprobe http://127.0.0.1:8000/mcp --sarif mcpprobe.sarif`.
+  `pipx run --spec mcpprobe-scanner==0.3.3 mcpprobe http://127.0.0.1:8000/mcp --sarif mcpprobe.sarif`.
   For a remote target, it must be reachable from GitHub-hosted runners.
 - **Private repositories** need GitHub Code Security (Advanced Security) for code
   scanning uploads. Without it, keep the scan step as the gate and save
@@ -121,6 +122,6 @@ notifications on the analysis, never as passes.
   plans to deprecate v3; `upload-sarif@v4` takes the same inputs. Switch when your
   organisation does.
 - **Active mode** (`extra-args: --active ...`) also needs `--authorised-by`,
-  `--scope` and `--verify dns-txt`; see the README. In 0.3.2 the active checks are
+  `--scope` and `--verify dns-txt`; see the README. In 0.3.3 the active checks are
   stubs.
-- **Pin a version.** Use `@v0.3.2` (or a full commit SHA), not `@main`.
+- **Pin a version.** Use `@v0.3.3` (or a full commit SHA), not `@main`.

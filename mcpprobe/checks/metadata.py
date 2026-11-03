@@ -206,6 +206,7 @@ class Meta03DangerousCapabilitySurface(Check):
             findings.append(
                 self.finding(
                     title="High-impact tool capabilities exposed",
+                    variant="high-impact",
                     description="Tools classified as high-impact: "
                     + summary
                     + ". Review that each is necessary, scoped and gated by user approval.",
@@ -354,6 +355,7 @@ class Meta04SchemaHygiene(Check):
             findings.append(
                 self.finding(
                     title="Duplicate tool names",
+                    variant="duplicate-names",
                     description="Tool names listed more than once: " + ", ".join(dupes) + ".",
                     severity=Severity.MEDIUM,
                     confidence=Confidence.HIGH,

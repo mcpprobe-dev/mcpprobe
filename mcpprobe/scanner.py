@@ -22,6 +22,7 @@ from mcpprobe.models import (
     Fingerprint,
     Inventory,
     ScanReport,
+    dedupe_findings,
     utcnow,
 )
 from mcpprobe.policy import DEFAULT_RATE, check_opt_out, clamp_rate
@@ -247,7 +248,7 @@ async def run_check(check: Check, ctx: ScanContext) -> CheckResult:
     started = time.monotonic()
     throttled_before = ctx.transport.throttle_exhausted
     try:
-        result.findings = await check.run(ctx)
+        result.findings = dedupe_findings(await check.run(ctx))
     except NotApplicable as exc:
         result.status = CheckStatus.NOT_APPLICABLE
         result.reason = exc.reason
@@ -372,9 +373,12 @@ async def run_scan(config: ScanConfig) -> tuple[ScanReport, EvidenceLog]:
             report.checks.append(result)
             report.findings.extend(result.findings)
         report.notes.extend(ctx.notes)
+        # Each check's findings are already de-duplicated; this keeps the report-wide
+        # list (and so counts, max severity, chains and SARIF results) to one entry per uid.
+        report.findings = dedupe_findings(report.findings)
         report.chains = build_chains(report, ctx)
         report.readiness = build_readiness(report)
     report.finished_at = utcnow()
     report.evidence_count = len(evidence)
-    report.findings.sort(key=lambda f: (-f.severity.rank, f.id, f.location or ""))
+    report.findings.sort(key=lambda f: (-f.severity.rank, f.id, f.location or "", f.variant or ""))
     return report, evidence

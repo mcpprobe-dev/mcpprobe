@@ -159,7 +159,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: mcpprobe-dev/mcpprobe@v0.3.2
+      - uses: mcpprobe-dev/mcpprobe@v0.3.3
         id: scan
         with:
           target: https://staging.your-server.example/mcp

@@ -165,6 +165,7 @@ class Err01VerboseErrors(Check):
             findings.append(
                 self.finding(
                     title="Server header discloses software version",
+                    variant="server-header",
                     description=f"Server: {server_header}",
                     severity=Severity.INFO,
                     confidence=Confidence.HIGH,
@@ -281,6 +282,7 @@ class Dos01UnboundedConsumption(Check):
                 findings.append(
                     self.finding(
                         title=f"Server struggled with {label} request",
+                        variant=f"{label}-probe",
                         description=f"The {label} probe produced: {problem}. Input limits may be missing.",
                         severity=Severity.LOW if "slow" in problem else Severity.MEDIUM,
                         confidence=Confidence.MEDIUM,

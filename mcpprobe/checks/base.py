@@ -186,6 +186,7 @@ class Check(abc.ABC):
         confidence: Confidence = Confidence.HIGH,
         evidence: list[EvidenceRecord] | None = None,
         location: str | None = None,
+        variant: str | None = None,
         fix: str | None = None,
         details: dict[str, Any] | None = None,
         title: str | None = None,
@@ -198,7 +199,9 @@ class Check(abc.ABC):
         """Build a :class:`Finding` pre-filled from the check's metadata.
 
         ``excerpt`` overrides the evidence excerpt that is otherwise derived from
-        the first evidence record. A finding whose confidence is not high must
+        the first evidence record. ``variant`` must be set on every finding after
+        the first that the check can report at the same ``location`` in one scan,
+        so each finding keeps a distinct, stable ``uid``. A finding whose confidence is not high must
         say why (``confidence_reason``); this is enforced so no label goes unexplained.
         """
         records = [e for e in (evidence or []) if e is not None]
@@ -215,6 +218,7 @@ class Check(abc.ABC):
             evidence=records,
             evidence_excerpt=excerpt if excerpt is not None else evidence_excerpt(records),
             location=location,
+            variant=variant,
             details=details or {},
             false_positive_notes=self.false_positive_notes or None,
             confidence_reason=confidence_reason,

@@ -360,6 +360,7 @@ class Trans03SessionIdQuality(Check):
             findings.append(
                 self.finding(
                     title="Forged session ID accepted",
+                    variant="forged-session-id",
                     description=(
                         "tools/list with a random, never-issued Mcp-Session-Id was answered with a "
                         "result. The server does not validate session IDs (spec: 404 for unknown sessions)."
@@ -461,6 +462,7 @@ class Trans04DeprecatedTransport(Check):
             findings.append(
                 self.finding(
                     title="Pre-2025-06-18 protocol revision negotiated",
+                    variant="old-revision",
                     description=f"The server negotiated protocol revision {fp.protocol_version}, "
                     "which predates the current authorization and transport requirements.",
                     severity=Severity.INFO,
@@ -521,6 +523,7 @@ class Trans05TlsAndHeaders(Check):
             findings.append(
                 self.finding(
                     title="MCP endpoint served over plain HTTP",
+                    variant="plain-http",
                     description=(
                         "The endpoint is reachable over unencrypted HTTP; bearer tokens, session IDs "
                         "and tool data travel in the clear."
@@ -546,6 +549,7 @@ class Trans05TlsAndHeaders(Check):
             findings.append(
                 self.finding(
                     title="Weak TLS version negotiated",
+                    variant="weak-tls",
                     description=f"The connection negotiated {http.tls_version}.",
                     severity=Severity.MEDIUM,
                     confidence=Confidence.HIGH,

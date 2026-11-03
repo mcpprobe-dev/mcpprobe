@@ -52,6 +52,8 @@ A check whose requests were rate limited beyond the budget is reported
 | Field | Meaning |
 |---|---|
 | `id`, `title`, `severity`, `confidence`, `standards`, `description`, `fix`, `location`, `details`, `false_positive_notes` | As in 0.1. |
+| `uid` *(0.3.3)* | Identity of the finding, unique within the report and stable across scans: `<id>:<location or ->`, plus `:<variant>` when set. `id` is the check ID, which several findings can share; `uid` tells them apart. It is also the SARIF `partialFingerprints["mcpprobe/v1"]` value. |
+| `variant` *(0.3.3)* | `null` for a check's main finding; a short name (e.g. `forged-session-id`, `plain-http`, `server-header`) for another finding the same check reports at the same location. When two findings would still share a `uid` but say different things (for example two tools listed under the same name with different descriptions), each gets an 8-character variant derived from its content. A finding reported twice with identical content (for example because the server listed the same tool twice) appears once, with the evidence of both. |
 | `confidence_reason` *(0.2)* | One sentence; always present when `confidence` is not `high`. |
 | `verify` *(0.2)* | One runnable line that confirms the fix (a `curl` for HTTP targets, using the real target URL; `$TOKEN` where credentials are needed). |
 | `affected` *(0.2)* | Tools, headers or paths affected. A check emits one finding per root cause, listing every affected item. |

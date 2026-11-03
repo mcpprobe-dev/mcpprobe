@@ -7,10 +7,12 @@ report is a faithful, schema-stable serialisation of what the scanner saw.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
+import json
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 #: Maximum number of body bytes retained per request/response in evidence.
 #: Proof excerpts are always built from parsed data, never from this copy.
@@ -145,6 +147,13 @@ class Finding(BaseModel):
         default=None,
         description="Where in the target the issue lives (tool name, header, URL path...)",
     )
+    variant: str | None = Field(
+        default=None,
+        description=(
+            "Distinguishes separate findings of one check at the same location "
+            "(e.g. 'forged-session-id'); None for the check's main finding"
+        ),
+    )
     details: dict[str, Any] = Field(default_factory=dict)
     false_positive_notes: str | None = None
     confidence_reason: str | None = Field(
@@ -162,10 +171,82 @@ class Finding(BaseModel):
         default_factory=list, description="IDs of the supporting evidence records"
     )
 
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def uid(self) -> str:
+        """Identity of this finding, unique within a report and stable across scans.
+
+        ``<check id>:<location or ->``, plus ``:<variant>`` when the check reports more
+        than one thing at the same location. ``id`` stays the check ID (several findings
+        can share it); ``uid`` is what tells them apart.
+        """
+        base = f"{self.id}:{self.location or '-'}"
+        return f"{base}:{self.variant}" if self.variant else base
+
     @property
     def fingerprint(self) -> str:
-        """Stable identity for de-duplication across scans (used in SARIF)."""
-        return f"{self.id}:{self.location or '-'}"
+        """Stable identity for de-duplication across scans (SARIF ``partialFingerprints``)."""
+        return self.uid
+
+    def content_digest(self) -> str:
+        """Hash of what the finding says (not of its evidence), used to spot genuine duplicates."""
+        payload = json.dumps(
+            [
+                self.id,
+                self.location,
+                self.variant,
+                self.title,
+                self.severity.value,
+                self.description,
+                sorted(self.affected),
+                self.details,
+            ],
+            sort_keys=True,
+            default=str,
+            ensure_ascii=False,
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def dedupe_findings(findings: list[Finding]) -> list[Finding]:
+    """Return ``findings`` with genuine duplicates merged and every ``uid`` unique.
+
+    Two findings with the same ``uid`` that say the same thing (same title, severity,
+    description, affected items and details) are one finding reported twice, for
+    example because the server listed the same tool twice; they are merged into the
+    first, keeping the union of their evidence. Findings that share a ``uid`` but say
+    different things are kept, and each gets a variant derived from its content (not
+    from its position), so the ``uid`` stays the same from one scan to the next.
+    Order is preserved.
+    """
+    by_uid: dict[str, list[Finding]] = {}
+    for f in findings:
+        by_uid.setdefault(f.uid, []).append(f)
+    if all(len(group) == 1 for group in by_uid.values()):
+        return list(findings)
+    keep: dict[int, Finding] = {}
+    for group in by_uid.values():
+        merged: dict[str, Finding] = {}
+        for f in group:
+            digest = f.content_digest()
+            first = merged.get(digest)
+            if first is None:
+                merged[digest] = f
+                keep[id(f)] = f
+            else:
+                _merge_into(first, f)
+        if len(merged) > 1:
+            for digest, f in merged.items():
+                f.variant = f"{f.variant}-{digest[:8]}" if f.variant else digest[:8]
+    return [f for f in findings if id(f) in keep]
+
+
+def _merge_into(target: Finding, dup: Finding) -> None:
+    seen = {e.id for e in target.evidence}
+    target.evidence.extend(e for e in dup.evidence if e.id not in seen)
+    for eid in dup.evidence_ids:
+        if eid not in target.evidence_ids:
+            target.evidence_ids.append(eid)
 
 
 class CheckStatus(str, Enum):

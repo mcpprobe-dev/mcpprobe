@@ -6,6 +6,38 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-11-03
+
+Findings in one report no longer share an identity. Nothing about what the checks
+detect has changed.
+
+### Fixed
+
+- A report could contain the same finding identity more than once. A finding was
+  identified by its check ID and location only, but several checks report more than one
+  thing at the same location (TRANS-03 weak and forged session IDs, TRANS-05 plain HTTP
+  and missing security headers, ERR-01 verbose errors and the `Server` header, META-03
+  arbitrary and high-impact capabilities; also AUTH-03, AUTH-04, DOS-01, META-02, META-04
+  and TRANS-04), so their SARIF results shared a `partialFingerprints` value and
+  code-scanning tools could merge them. A server that
+  listed the same tool twice also made META-01 and META-05 report the same finding twice,
+  which counted it twice in `counts`.
+- Each finding now has a `uid` (`<check id>:<location>`, plus `:<variant>` where a check
+  reports more than one thing at one location) that is unique within the report and is
+  used as the SARIF fingerprint. Findings reported twice with identical content are
+  merged into one, keeping the evidence of both, so `counts`, `max_severity`,
+  `findings_max_severity`, attack chains and SARIF results all come from the same
+  de-duplicated list. `id` and SARIF `ruleId` are unchanged (still the check ID).
+- AUTH-03 assesses an authorization server listed twice in the protected resource
+  metadata once.
+
+### Changed
+
+- JSON report: findings have new `uid` and `variant` fields (schema stays 0.3; fields
+  were only added). A finding without a variant keeps the SARIF fingerprint it had in
+  0.3.2; findings that now have a variant get a new one, so code scanning may close the
+  old alert and open a new one for them once.
+
 ## [0.3.2] - 2026-11-02
 
 Two counting fixes. Nothing about what the checks detect has changed.
