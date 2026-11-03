@@ -200,6 +200,9 @@ server instructions. Later runs report anything added, removed or changed (a cha
 description after approval is the classic rug pull) and update the file; use
 `--no-write-baseline` to compare without updating.
 
+[examples/](examples/) has two tiny local servers that reproduce tool poisoning and a rug
+pull, with the commands and the findings they produce.
+
 ## Reports and evidence
 
 - `--json FILE`: the full report, including every request/response pair (timestamp,
