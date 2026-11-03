@@ -4,11 +4,11 @@ mcpprobe is a free, open-source command-line scanner for people who build or run
 [Model Context Protocol](https://modelcontextprotocol.io) (MCP) servers: point it at
 your server and it tells you what is exposed, what is wrong and how to fix it.
 
-![mcpprobe scanning the deliberately vulnerable test server in this repository](docs/assets/mcpprobe-demo.gif)
+![mcpprobe scanning the deliberately vulnerable test server in this repository](https://raw.githubusercontent.com/mcpprobe-dev/mcpprobe/main/docs/assets/mcpprobe-demo.gif)
 
 *A real terminal recording of mcpprobe 0.3.3 scanning the deliberately vulnerable
 test server that ships in this repository. Nothing was edited; only idle time was
-shortened. Still image: [docs/assets/mcpprobe-demo.png](docs/assets/mcpprobe-demo.png).*
+shortened. Still image: [docs/assets/mcpprobe-demo.png](https://raw.githubusercontent.com/mcpprobe-dev/mcpprobe/main/docs/assets/mcpprobe-demo.png).*
 
 It runs on your machine. There is no account, no API key and no telemetry, and it
 never calls one of your tools.
