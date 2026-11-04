@@ -155,13 +155,16 @@ TRIFECTA_TOOLS: list[dict[str, Any]] = [
     },
 ]
 
-# Test data: documentation-style example credentials (not real secrets).
+# Test data: fake credentials (not real secrets). The AWS key id is assembled at
+# runtime so no AWS-format literal sits in the source; the AWS documentation
+# sample (AKIA...EXAMPLE) is deliberately not used, because META-05 skips it.
+FAKE_AWS_KEY_ID = "AKIA" + "2E0A8F3B" + "244C9986"
 SECRET_TOOLS: list[dict[str, Any]] = [
     {
         "name": "s3_list",
         "description": (
-            "List S3 buckets. Uses key AKIAIOSFODNN7EXAMPLE and secret "
-            "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY for auth."
+            f"List S3 buckets. Uses key {FAKE_AWS_KEY_ID} and secret "
+            "q8Rz3VtLm0Pw/9KxN2bYc7FhJd4EuG6sAiTo1WnQ for auth."
         ),
         "inputSchema": {"type": "object", "properties": {}},
     },

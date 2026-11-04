@@ -1,6 +1,6 @@
 # mcpprobe checks catalogue
 
-Generated from the check metadata of mcpprobe 0.3.3 (`mcpprobe checks --format markdown`). Do not edit by hand.
+Generated from the check metadata of mcpprobe 0.3.4 (`mcpprobe checks --format markdown`). Do not edit by hand.
 
 Standards: OWASP MCP Top 10 (IDs `MCP0x:2025`, still a beta list, so shown with `(beta)`), OWASP Top 10 for Agentic Applications (`ASI0x`), OWASP Top 10 for LLM Applications 2026 (`LLM0x:2026`, primary) and 2025 (`LLM0x:2025`, kept for one release cycle). Severities are defaults; a check can raise or lower the severity of an individual finding (for example loopback-only servers are reported one level lower), and heuristic checks never rate a finding Critical on their own.
 
@@ -334,7 +334,7 @@ Computes SHA-256 over the canonical JSON of each tool, prompt and resource defin
 
 Classifies each tool by name, description and parameter names into capability classes. Tools that advertise arbitrary command execution, arbitrary file read or arbitrary file write (a shell/file capability selected by a free-form string argument with no enum, const or pattern) are rated high on their own and critical when the remote endpoint needs no authentication. The remaining high-impact surface (network, e-mail, credentials, payments) is summarised at low severity. Annotations that contradict the capability are reported by META-06 (until 0.2 they were reported here). Passive scanning sees the advertised capability, not whether the implementation really executes: the rating is based on the name, description and schema, and no tool is called.
 
-**False positives.** Classification is keyword-based: a tool named 'delete_draft' that only removes the user's own draft will be classed 'delete'. A tool that advertises a shell but whose implementation is a stub is still reported, because clients and models act on the advertised capability.
+**False positives.** Classification is keyword-based: a tool named 'delete_draft' that only removes the user's own draft will be classed 'delete'. A tool that advertises a shell but whose implementation is a stub is still reported, because clients and models act on the advertised capability. Since 0.3.4 lookup tools (names built from get/search/describe and no action verb, such as 'get_cli_command') are only rated as command execution or file read when their description says they execute something or read files.
 
 **Fix.** For arbitrary command execution or file access: remove the tool, or sandbox it and replace the free-form argument with an allow-list (enum) of commands or files. Annotations come after that (META-06); they help a careful client warn the user but do nothing about the risk.
 
@@ -366,7 +366,7 @@ Checks tool names against [A-Za-z0-9_.-]{1,128} and for duplicates; checks that 
 
 Pattern and entropy scan for AWS/GitHub/Slack/Stripe/Google keys, private key blocks, JWTs, bearer tokens, connection strings with passwords and generic 'key=...' assignments across tool/prompt/resource descriptions, parameter descriptions, resource URIs, server instructions and, for stdio targets, the command line and environment supplied to the scanner. Matched values are redacted in the report.
 
-**False positives.** Example keys from vendor documentation (for instance the AWS sample key IDs ending in EXAMPLE) match the patterns. High-entropy strings are reported at Low severity and low confidence; identifiers such as content hashes trigger them. Secrets in a stdio server's environment are expected (the spec says stdio servers take credentials from the environment) and are reported as Low so the operator can confirm least privilege.
+**False positives.** Published sample keys (the AWS keys ending in EXAMPLE, the Stripe and jwt.io documentation samples) and obvious placeholders are skipped since 0.3.4; other example values that look real can still match. High-entropy strings are reported at Low severity and low confidence; identifiers such as content hashes trigger them. Secrets in a stdio server's environment are expected (the spec says stdio servers take credentials from the environment) and are reported as Low so the operator can confirm least privilege.
 
 **Fix.** Remove secrets from descriptions and resources, rotate anything that was exposed, and pass credentials through the environment or a secret store, never through metadata.
 

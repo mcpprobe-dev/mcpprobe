@@ -16,7 +16,7 @@ from mcpprobe.checks.metadata import find_secrets
 from mcpprobe.checks.poisoning import analyse_text, find_invisible_unicode, find_mixed_script_words
 from mcpprobe.models import Confidence, Severity
 from tests.conftest import by_id, run, stdio_command
-from tests.fake_server import BENIGN_TOOLS, POISONED_TOOLS, SECRET_TOOLS
+from tests.fake_server import BENIGN_TOOLS, FAKE_AWS_KEY_ID, POISONED_TOOLS, SECRET_TOOLS
 
 
 def kinds(text: str, **kw) -> set[str]:
@@ -302,10 +302,10 @@ async def test_meta04_schema_hygiene(make_server):
 
 # ----------------------------------------------------------------------------- META-05
 def test_meta05_patterns_and_redaction():
-    hits = find_secrets("key AKIAIOSFODNN7EXAMPLE and -----BEGIN OPENSSH PRIVATE KEY-----")
+    hits = find_secrets(f"key {FAKE_AWS_KEY_ID} and -----BEGIN OPENSSH PRIVATE KEY-----")
     kinds_ = {h["kind"] for h in hits}
     assert {"AWS access key id", "private key block"} <= kinds_
-    assert all("AKIAIOSFODNN7EXAMPLE" not in h["value"] for h in hits)
+    assert all(FAKE_AWS_KEY_ID not in h["value"] for h in hits)
     assert find_secrets("Return the current weather for a city.") == []
     entropy = find_secrets("id 9fQ2xL7pV0aZk3RtY8mN1cB6wE4uH5sJ")
     assert entropy and entropy[0]["kind"] == "high-entropy string" and entropy[0]["severity"] == "low"
@@ -317,11 +317,11 @@ async def test_meta05_end_to_end_and_evidence_redacted(make_server):
     f = {x.location: x for x in by_id(report, "META-05")}
     s3 = f["tools[s3_list].description"]
     assert s3.severity == Severity.HIGH and s3.confidence == Confidence.HIGH
-    assert "AKIAIOSFODNN7EXAMPLE" not in s3.description
+    assert FAKE_AWS_KEY_ID not in s3.description
     assert "ghp_" in f["tools[gh_issue].description"].description
     # The raw secret must not survive anywhere in the serialised finding (evidence included).
     dumped = json.dumps([x.model_dump(mode="json") for x in f.values()])
-    assert "AKIAIOSFODNN7EXAMPLE" not in dumped
+    assert FAKE_AWS_KEY_ID not in dumped
     assert "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef0123" not in dumped
 
 

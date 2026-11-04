@@ -6,6 +6,24 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-11-04
+
+Two false positives reported by server owners are fixed.
+
+### Fixed
+
+- META-05 no longer reports published sample credentials (the AWS documentation keys
+  ending in `EXAMPLE`, the Stripe and jwt.io documentation samples) or obvious
+  placeholders such as `xxxxxx`, `your_api_key` or `${TOKEN}` as live secrets. A
+  security tool that quotes `AKIAIOSFODNN7EXAMPLE` to explain what it detects is no
+  longer flagged.
+- META-03 no longer rates lookup tools as command execution or file read on wording
+  alone. `get_cli_command(command)`, which returns documentation for a command, and
+  `get_document(path)`, which returns a published page, are only rated when the
+  description says the tool executes something or reads files. `run_command`,
+  `read_file` and lookup-named tools that say they run shell commands are still
+  reported.
+
 ## [0.3.3] - 2026-11-03
 
 Findings in one report no longer share an identity. Nothing about what the checks

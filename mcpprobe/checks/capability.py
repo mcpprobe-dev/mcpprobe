@@ -221,6 +221,88 @@ def _unconstrained_strings(tool: dict[str, Any]) -> list[str]:
     return out
 
 
+#: Name tokens that mark a lookup/reference tool ("get_cli_command" returns the
+#: documentation entry for a command; it does not run one).
+_LOOKUP_TOKENS = frozenset(
+    {
+        "get",
+        "search",
+        "list",
+        "lookup",
+        "find",
+        "describe",
+        "explain",
+        "show",
+        "query",
+        "docs",
+        "doc",
+        "help",
+        "reference",
+        "manual",
+        "info",
+        "about",
+        "define",
+        "browse",
+    }
+)
+#: Name tokens that mean the tool acts, whatever else the name says.
+_ACTION_TOKENS = frozenset(
+    {
+        "run",
+        "exec",
+        "execute",
+        "eval",
+        "spawn",
+        "shell",
+        "bash",
+        "sh",
+        "zsh",
+        "powershell",
+        "terminal",
+        "subprocess",
+        "invoke",
+        "write",
+        "save",
+        "create",
+        "edit",
+        "delete",
+        "remove",
+        "put",
+        "upload",
+        "cat",
+        "open",
+        "readfile",
+        "read",
+    }
+)
+#: Description wording that really advertises execution (not just the noun "command").
+_STRONG_EXEC = re.compile(
+    r"\b(shell|bash|zsh|powershell|terminal|subprocess|eval)\b|"
+    r"\b(run|runs|running|execute|executes|executing|spawn|spawns|invoke|invokes)\b[^.\n]{0,40}?"
+    r"\b(commands?|shell|scripts?|code|programs?|processes|binaries|cmd)\b",
+    re.I,
+)
+#: Name tokens for documents and records rather than files on disk.
+_DOC_TOKENS = frozenset(
+    {"document", "documents", "doc", "docs", "page", "article", "entry", "manual", "note", "record"}
+)
+
+
+def _name_tokens(name: str) -> list[str]:
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name)
+    return [t for t in re.split(r"[^A-Za-z0-9]+", spaced.lower()) if t]
+
+
+def is_lookup_tool(tool: dict[str, Any]) -> bool:
+    """True when the tool's name says it looks something up and nothing in it says it acts."""
+    tokens = _name_tokens(str(tool.get("name", "")))
+    return (
+        bool(tokens)
+        and any(t in _LOOKUP_TOKENS for t in tokens)
+        and not any(t in _ACTION_TOKENS for t in tokens)
+    )
+
+
 def arbitrary_capabilities(tool: dict[str, Any]) -> dict[str, str]:
     """Advertised capabilities that are arbitrary by construction.
 
@@ -228,17 +310,30 @@ def arbitrary_capabilities(tool: dict[str, Any]) -> dict[str, str]:
     file access *and* it takes a free-form string argument (no enum, const or
     pattern) that selects the command or path. Based on what the server
     advertises; a passive scan does not call the tool.
+
+    Lookup tools (a name built from verbs like get/search/describe and no action
+    verb) only count when the description itself says the tool executes
+    something or reads files: ``get_cli_command(command)`` returns documentation
+    about a command, and ``get_document(path)`` returns a published page.
     """
     name = str(tool.get("name", ""))
-    text = f"{name} {name.replace('_', ' ')} {tool.get('title') or ''} {tool.get('description') or ''}"
+    description = f"{tool.get('title') or ''} {tool.get('description') or ''}"
+    text = f"{name} {name.replace('_', ' ')} {description}"
     free = _unconstrained_strings(tool)
+    lookup = is_lookup_tool(tool)
     out: dict[str, str] = {}
-    if _EXEC_WORDS.search(text):
+    if _EXEC_WORDS.search(text) and (not lookup or _STRONG_EXEC.search(description)):
         arg = next((a for a in free if _EXEC_ARG.match(a)), None)
         if arg:
             out[ARBITRARY_EXEC] = arg
     path_arg = next((a for a in free if _PATH_ARG.match(a)), None)
-    if path_arg and _READ_WORDS.search(text):
+    doc_lookup = lookup and any(t in _DOC_TOKENS for t in _name_tokens(name)) and "file" not in name.lower()
+    read_text = description if doc_lookup else text
+    if (
+        path_arg
+        and _READ_WORDS.search(read_text)
+        and not (doc_lookup and not re.search(r"\bfiles?\b", description, re.I))
+    ):
         out[ARBITRARY_FILE_READ] = path_arg
     if path_arg and _WRITE_WORDS.search(text):
         out[ARBITRARY_FILE_WRITE] = path_arg

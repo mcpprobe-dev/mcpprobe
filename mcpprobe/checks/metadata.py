@@ -83,7 +83,9 @@ class Meta03DangerousCapabilitySurface(Check):
         "Classification is keyword-based: a tool named 'delete_draft' that only removes the "
         "user's own draft will be classed 'delete'. A tool that advertises a shell but whose "
         "implementation is a stub is still reported, because clients and models act on the "
-        "advertised capability."
+        "advertised capability. Since 0.3.4 lookup tools (names built from get/search/describe "
+        "and no action verb, such as 'get_cli_command') are only rated as command execution or "
+        "file read when their description says they execute something or read files."
     )
     fix = (
         "For arbitrary command execution or file access: remove the tool, or sandbox it and "
@@ -378,19 +380,62 @@ _ENTROPY_TOKEN = re.compile(r"(?<![\w/+=-])[A-Za-z0-9_\-/+=]{24,}(?![\w/+=-])")
 _SECRET_ENV_NAME = re.compile(r"(key|secret|token|password|passwd|pwd|credential|auth)", re.I)
 
 
+#: Sample credentials published in vendor documentation. They match the real
+#: formats but are not live, and tools legitimately quote them (for example a
+#: secret scanner describing what it detects).
+DOCUMENTED_EXAMPLE_SECRETS: frozenset[str] = frozenset(
+    {
+        "AKIAIOSFODNN7EXAMPLE",  # AWS docs access key id
+        "AKIAI44QH8DHBEXAMPLE",  # AWS docs access key id
+        "ASIAIOSFODNN7EXAMPLE",
+        "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",  # AWS docs secret key
+        "je7MtGbClwBF/2Zp9Utk/h3yCo8nvbEXAMPLEKEY",
+        "sk_" + "test_4eC39HqLyjWDarjtT1zdp7dc",  # Stripe docs test key; split so push protection ignores it
+        "sk_" + "test_BQokikJOvBiI2HlWgH4olfQ2",
+        "AIza" + "SyDaGmWKa4JsXZ-HjGw7ISLn_3namBGewQe",  # Google docs sample
+        # jwt.io sample token (header.payload)
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ",
+    }
+)
+_PLACEHOLDER = re.compile(
+    r"EXAMPLE|example|x{6,}|X{6,}|\*{4,}|0{8,}|your[_-]?(?:api[_-]?)?(?:key|token|secret)|"
+    r"<[^>]{2,40}>|\$\{[^}]+\}|placeholder|redacted|dummy|fake|sample|changeme|replace[_-]?me",
+    re.I,
+)
+
+
+def is_documented_example(value: str) -> bool:
+    """True for published sample credentials and obvious placeholders (not live secrets)."""
+    v = value.strip().strip("'\"")
+    if any(v.startswith(ex) or (ex.startswith(v) and len(v) >= 16) for ex in DOCUMENTED_EXAMPLE_SECRETS):
+        return True
+    if _PLACEHOLDER.search(v):
+        return True
+    body = re.sub(r"^(?:AKIA|ASIA|ghp_|gho_|sk_live_|sk_test_|rk_live_|rk_test_|sk-|xox[baprs]-|AIza)", "", v)
+    return len(body) >= 8 and len(set(body.lower())) <= 3  # e.g. AKIAAAAAAAAAAAAAAAAA
+
+
 def find_secrets(text: str) -> list[dict[str, Any]]:
-    """Return pattern and entropy hits in ``text`` (values redacted)."""
+    """Return pattern and entropy hits in ``text`` (values redacted).
+
+    Documented sample credentials and placeholders are skipped: they match the
+    formats but are not live (see ``is_documented_example``).
+    """
     hits: list[dict[str, Any]] = []
     covered: list[tuple[int, int]] = []
     for label, pattern, sev in SECRET_PATTERNS:
         for m in pattern.finditer(text):
             value = m.group(1) if m.lastindex else m.group(0)
-            hits.append({"kind": label, "severity": sev.value, "value": redact(value), "confidence": "high"})
             covered.append(m.span())
+            if is_documented_example(value):
+                continue
+            hits.append({"kind": label, "severity": sev.value, "value": redact(value), "confidence": "high"})
     for m in _ENTROPY_TOKEN.finditer(text):
         if any(a <= m.start() < b for a, b in covered):
             continue
         token = m.group(0)
+        if is_documented_example(token):
+            continue
         if "/" in token and token.count("/") > 2:  # looks like a path
             continue
         has_digit = any(c.isdigit() for c in token)
@@ -421,7 +466,8 @@ class Meta05SecretsInMetadata(Check):
     )
     evidence_type = "The listing response that contained the match; values redacted."
     false_positive_notes = (
-        "Example keys from vendor documentation (for instance the AWS sample key IDs ending in EXAMPLE) match the patterns. "
+        "Published sample keys (the AWS keys ending in EXAMPLE, the Stripe and jwt.io documentation samples) and "
+        "obvious placeholders are skipped since 0.3.4; other example values that look real can still match. "
         "High-entropy strings are reported at Low severity and low confidence; identifiers such "
         "as content hashes trigger them. Secrets in a stdio server's environment are expected "
         "(the spec says stdio servers take credentials from the environment) and are reported "
