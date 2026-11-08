@@ -45,6 +45,7 @@ import csv
 import hashlib
 import json
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -350,6 +351,8 @@ def parse_security_txt(text: str, now: datetime) -> tuple[list[str], list[str], 
                 expires = datetime.fromisoformat(value.replace("Z", "+00:00"))
             except ValueError:
                 return [], [], "unparseable Expires"
+            if expires.tzinfo is None:  # RFC 9116 requires a zone; treat a bare timestamp as UTC
+                expires = expires.replace(tzinfo=UTC)
     if not mails and not uris:
         return [], [], "no Contact field"
     if expires is None:
@@ -692,6 +695,32 @@ def p4_gate(wd: WorkDir, hand_check: Path | None) -> tuple[int, int]:
     return ok, n
 
 
+#: Wall-clock cap per organisation: a server that drips bytes forever must not stall the run.
+ORG_DEADLINE_S = 120
+
+
+class _Deadline(Exception):
+    pass
+
+
+def _raise_deadline(*_: object) -> None:
+    raise _Deadline
+
+
+def _discover_with_deadline(disc: "Discoverer", org: "Org", meta: dict[str, dict[str, str]]) -> tuple[list["Found"], list[str]]:
+    if not hasattr(signal, "SIGALRM"):  # pragma: no cover - Windows
+        return disc.discover(org, meta)
+    previous = signal.signal(signal.SIGALRM, _raise_deadline)
+    signal.alarm(ORG_DEADLINE_S)
+    try:
+        return disc.discover(org, meta)
+    except _Deadline:
+        return [], [f"discovery abandoned after {ORG_DEADLINE_S}s"]
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+
+
 def run(
     wd: WorkDir,
     segment: str,
@@ -739,7 +768,7 @@ def run(
     ):
         if limit is not None and i >= limit:
             break
-        found, notes = disc.discover(org, meta)
+        found, notes = _discover_with_deadline(disc, org, meta)
         host_notes = [n for t in org.hosts for n in t.notes]
         base = {
             "segment": segment,

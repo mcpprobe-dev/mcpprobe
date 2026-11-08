@@ -352,3 +352,17 @@ def test_security_txt_rules():
     assert oc.parse_security_txt(good, NOW) == (["security@x.example"], [], None)
     assert oc.parse_security_txt("Contact: mailto:a@x.example\n", NOW)[2] == "no Expires field"
     assert oc.parse_security_txt("Expires: 2027-01-01T00:00:00Z\n", NOW)[2] == "no Contact field"
+    # A bare timestamp (no zone) is read as UTC instead of crashing the run (seen live, 8 Nov 2026).
+    naive = "Contact: mailto:security@x.example\nExpires: 2027-01-01T00:00:00\n"
+    assert oc.parse_security_txt(naive, NOW) == (["security@x.example"], [], None)
+    stale = "Contact: mailto:security@x.example\nExpires: 2020-01-01T00:00:00\n"
+    assert oc.parse_security_txt(stale, NOW)[2].startswith("expired")
+
+
+def test_discover_deadline_abandons_a_hanging_org(monkeypatch):
+    class Hang:
+        def discover(self, org, meta):
+            raise oc._Deadline
+
+    found, notes = oc._discover_with_deadline(Hang(), None, {})
+    assert found == [] and notes and "abandoned" in notes[0]
