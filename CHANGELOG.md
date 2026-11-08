@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-11-08
+
+### Changed
+
+- META-03 wording: the finding now says the handshake and tool list answer without
+  authentication and that a passive scan cannot see whether `tools/call` needs a key.
+  Prompted by an operator whose listing is open on purpose while every `tools/call`
+  requires an API key.
+- Registry survey: a host whose registry entry declares a required header (an API key)
+  no longer counts as "open" for the P2 and P4 disclosure priorities.
+
 ## [0.3.4] - 2026-11-04
 
 Two false positives reported by server owners are fixed.

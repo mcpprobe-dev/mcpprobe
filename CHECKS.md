@@ -1,6 +1,6 @@
 # mcpprobe checks catalogue
 
-Generated from the check metadata of mcpprobe 0.3.4 (`mcpprobe checks --format markdown`). Do not edit by hand.
+Generated from the check metadata of mcpprobe 0.3.5 (`mcpprobe checks --format markdown`). Do not edit by hand.
 
 Standards: OWASP MCP Top 10 (IDs `MCP0x:2025`, still a beta list, so shown with `(beta)`), OWASP Top 10 for Agentic Applications (`ASI0x`), OWASP Top 10 for LLM Applications 2026 (`LLM0x:2026`, primary) and 2025 (`LLM0x:2025`, kept for one release cycle). Severities are defaults; a check can raise or lower the severity of an individual finding (for example loopback-only servers are reported one level lower), and heuristic checks never rate a finding Critical on their own.
 
@@ -334,7 +334,7 @@ Computes SHA-256 over the canonical JSON of each tool, prompt and resource defin
 
 Classifies each tool by name, description and parameter names into capability classes. Tools that advertise arbitrary command execution, arbitrary file read or arbitrary file write (a shell/file capability selected by a free-form string argument with no enum, const or pattern) are rated high on their own and critical when the remote endpoint needs no authentication. The remaining high-impact surface (network, e-mail, credentials, payments) is summarised at low severity. Annotations that contradict the capability are reported by META-06 (until 0.2 they were reported here). Passive scanning sees the advertised capability, not whether the implementation really executes: the rating is based on the name, description and schema, and no tool is called.
 
-**False positives.** Classification is keyword-based: a tool named 'delete_draft' that only removes the user's own draft will be classed 'delete'. A tool that advertises a shell but whose implementation is a stub is still reported, because clients and models act on the advertised capability. Since 0.3.4 lookup tools (names built from get/search/describe and no action verb, such as 'get_cli_command') are only rated as command execution or file read when their description says they execute something or read files.
+**False positives.** Classification is keyword-based: a tool named 'delete_draft' that only removes the user's own draft will be classed 'delete'. A tool that advertises a shell but whose implementation is a stub is still reported, because clients and models act on the advertised capability. Since 0.3.4 lookup tools (names built from get/search/describe and no action verb, such as 'get_cli_command') are only rated as command execution or file read when their description says they execute something or read files. The critical rating assumes tools/call is as open as tools/list; a server that gates tools/call with an API key the handshake does not require (and declares it in its registry entry) is rated high, not critical, in the registry survey since 0.3.5.
 
 **Fix.** For arbitrary command execution or file access: remove the tool, or sandbox it and replace the free-form argument with an allow-list (enum) of commands or files. Annotations come after that (META-06); they help a careful client warn the user but do nothing about the risk.
 

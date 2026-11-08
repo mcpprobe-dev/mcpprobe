@@ -81,3 +81,17 @@ def test_read_file_still_flagged():
 def test_get_file_contents_lookup_still_flagged():
     t = _tool("get_file_contents", "Return the contents of a file at path.", {"path": {"type": "string"}})
     assert ARBITRARY_FILE_READ in arbitrary_capabilities(t)
+
+
+# --- P2/P4 queue: registry-declared API key ---------------------------------------------------
+def test_declared_required_header_keeps_host_out_of_p2_and_p4():
+    from mcpprobe.registry.aggregate import disclosure_reasons
+
+    rec = {
+        "host": "h",
+        "status": "scanned",
+        "outcomes": {"AUTH-01": "critical", "META-03": "critical", "META-07": "high"},
+    }
+    assert {p for p, _ in disclosure_reasons(rec)} == {"P2", "P4"}
+    rec["needs_headers"] = True
+    assert disclosure_reasons(rec) == []

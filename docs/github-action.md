@@ -32,7 +32,7 @@ jobs:
 
       - name: Scan the MCP server
         id: scan
-        uses: mcpprobe-dev/mcpprobe@v0.3.4
+        uses: mcpprobe-dev/mcpprobe@v0.3.5
         with:
           target: https://staging.your-server.example/mcp
           fail-on: high
@@ -110,7 +110,7 @@ notifications on the analysis, never as passes.
 - **Reachability.** The container runs on the runner's Docker network, so
   `127.0.0.1` inside it is not the runner. To scan a server started earlier in the
   same job, use the CLI instead of the Action:
-  `pipx run --spec mcpprobe-scanner==0.3.4 mcpprobe http://127.0.0.1:8000/mcp --sarif mcpprobe.sarif`.
+  `pipx run --spec mcpprobe-scanner==0.3.5 mcpprobe http://127.0.0.1:8000/mcp --sarif mcpprobe.sarif`.
   For a remote target, it must be reachable from GitHub-hosted runners.
 - **Private repositories** need GitHub Code Security (Advanced Security) for code
   scanning uploads. Without it, keep the scan step as the gate and save

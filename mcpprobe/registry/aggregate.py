@@ -521,7 +521,10 @@ DESCRIPTIVE_ONLY = ("AUTH-01", "AUTH-02", "TRANS-05", "TRANS-06", "TRANS-09", "M
 def disclosure_reasons(r: dict[str, Any]) -> list[tuple[str, str]]:
     """(priority, reason) pairs for one merged survey record; empty when it does not qualify."""
     out: list[tuple[str, str]] = []
-    open_ = is_open(r)
+    # A registry entry that declares a required header (an API key) says tools/call is gated even
+    # though the handshake and tool list answer without it; a passive scan cannot see that, so such
+    # hosts never qualify as "open" for P2/P4 (operator feedback, 0.3.5).
+    open_ = is_open(r) and not r.get("needs_headers")
     meta05 = _outcome(r, "META-05")
     if meta05 in HIGH_PLUS:
         out.append(("P1", f"META-05 {meta05}: secret in tool metadata"))

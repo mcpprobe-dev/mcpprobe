@@ -85,7 +85,10 @@ class Meta03DangerousCapabilitySurface(Check):
         "implementation is a stub is still reported, because clients and models act on the "
         "advertised capability. Since 0.3.4 lookup tools (names built from get/search/describe "
         "and no action verb, such as 'get_cli_command') are only rated as command execution or "
-        "file read when their description says they execute something or read files."
+        "file read when their description says they execute something or read files. The critical rating "
+        "assumes tools/call is as open as tools/list; a server that gates tools/call with an API key the "
+        "handshake does not require (and declares it in its registry entry) is rated high, not critical, "
+        "in the registry survey since 0.3.5."
     )
     fix = (
         "For arbitrary command execution or file access: remove the tool, or sandbox it and "
@@ -121,8 +124,10 @@ class Meta03DangerousCapabilitySurface(Check):
             desc = (
                 f"The server advertises {', '.join(labels)} ({per_tool}). "
                 + (
-                    "The endpoint answers without authentication (AUTH-01), so anyone who can reach "
-                    "it, or any model prompt-injected into calling the tool, can use it. "
+                    "The handshake and tool list answer without authentication (AUTH-01). If tools/call "
+                    "accepts requests the same way, anyone who can reach the endpoint, or any model "
+                    "prompt-injected into calling the tool, can use it; a passive scan cannot see whether "
+                    "tools/call needs a key the listing did not require. "
                     if unauth
                     else "Any client allowed to call tools, or a model prompt-injected into calling "
                     "the tool, can use it. "
