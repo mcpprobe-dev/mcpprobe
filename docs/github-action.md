@@ -122,6 +122,6 @@ notifications on the analysis, never as passes.
   plans to deprecate v3; `upload-sarif@v4` takes the same inputs. Switch when your
   organisation does.
 - **Active mode** (`extra-args: --active ...`) also needs `--authorised-by`,
-  `--scope` and `--verify dns-txt`; see the README. In 0.3.4 the active checks are
+  `--scope` and `--verify dns-txt`; see the README. In 0.3.5 the active checks are
   stubs.
-- **Pin a version.** Use `@v0.3.4` (or a full commit SHA), not `@main`.
+- **Pin a version.** Use `@v0.3.5` (or a full commit SHA), not `@main`.

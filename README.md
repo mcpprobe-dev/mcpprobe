@@ -126,7 +126,7 @@ its evidence, known false positives and the fix; `mcpprobe checks` prints the sa
   few harmless malformed requests (listed in [Passive vs active](#passive-vs-active)).
   It never calls a tool.
 - **Active checks are not shipped.** Prompt-injection, supply-chain and sandbox checks
-  (INJ, SUPPLY, SANDBOX) exist only as placeholders in 0.3.4. Even the placeholders
+  (INJ, SUPPLY, SANDBOX) exist only as placeholders in 0.3.5. Even the placeholders
   need `--active`, a named approver, a scope and proof that you own the server.
 - **It judges tools by what they say, not what they do.** Because it never calls a
   tool, findings about tool capabilities come from names, descriptions and schemas.
@@ -229,7 +229,7 @@ wrong-audience JWT, truncated JSON, one oversized and one deeply nested request)
 never calls a tool.
 
 **Active** (`--active`) is for checks that call tools with non-destructive canaries.
-In 0.3.4 these are stubs, but the gate is real and enforced in code. Active mode is
+In 0.3.5 these are stubs, but the gate is real and enforced in code. Active mode is
 refused unless you pass all of:
 
 - `--authorised-by "<who approved this, e.g. name/role/ticket>"`
