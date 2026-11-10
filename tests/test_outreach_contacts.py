@@ -366,3 +366,64 @@ def test_discover_deadline_abandons_a_hanging_org(monkeypatch):
 
     found, notes = oc._discover_with_deadline(Hang(), None, {})
     assert found == [] and notes and "abandoned" in notes[0]
+
+
+class _Pages:
+    """A fetcher over an in-memory {url: html} map; everything else is a 404."""
+
+    def __init__(self, pages):
+        self.pages, self.seen = pages, []
+
+    def get(self, url):
+        self.seen.append(url)
+        if url in self.pages:
+            return oc.Page(200, self.pages[url], url)
+        return oc.Page(404, "", url)
+
+
+def _disc(pages, segment="B"):
+    return oc.Discoverer(_Pages(pages), segment=segment, now=NOW)
+
+
+def test_second_pass_reads_the_organisation_domain_when_the_registry_has_no_website():
+    org = oc.Org(
+        "nosite.example", "nosite.example", False, [oc.Target("mcp.nosite.example", "", ["example.nosite/x"])]
+    )
+    d = _disc(
+        {"https://nosite.example/about": "<p>Write to <a href='mailto:support@nosite.example'>us</a></p>"}
+    )
+    found, _ = d.discover(org, {})
+    assert [(f.contact, f.source) for f in found] == [
+        ("support@nosite.example", "website (organisation domain)")
+    ]
+    # a personal GitHub namespace has no organisation site to read
+    gh = oc.Org("someone", "", True, [oc.Target("x.vercel.app", "", ["io.github.someone/x"])])
+    assert _disc({}).discover(gh, {}) == ([], ["x.vercel.app: shared platform, host security.txt skipped"])
+
+
+def test_contact_form_is_recorded_for_hand_use_and_never_eligible(wd):
+    form = "<form action='/send'><input name='email'><textarea name='msg'></textarea></form>"
+    d = _disc({"https://formonly.example/contact": form})
+    org = oc.Org(
+        "formonly.example",
+        "formonly.example",
+        False,
+        [oc.Target("mcp.formonly.example", "", ["example.formonly/x"])],
+    )
+    found, _ = d.discover(org, {})
+    assert [(f.contact, f.contact_type) for f in found] == [("https://formonly.example/contact", "form")]
+    # segment A never falls back to a form
+    assert _disc({"https://formonly.example/contact": form}, "A").discover(org, {})[0] == []
+
+
+def test_website_page_redirected_off_domain_is_ignored():
+    class Redirect(_Pages):
+        def get(self, url):
+            if url.endswith("/contact"):
+                return oc.Page(200, "mailto:hello@parked.example", "https://parked.example/")
+            return super().get(url)
+
+    org = oc.Org(
+        "moved.example", "moved.example", False, [oc.Target("mcp.moved.example", "", ["example.moved/x"])]
+    )
+    assert oc.Discoverer(Redirect({}), segment="B", now=NOW).discover(org, {})[0] == []

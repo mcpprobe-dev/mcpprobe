@@ -187,8 +187,29 @@ SECURITY_ROLES = frozenset(
     }
 )
 GENERAL_ROLES = frozenset(
-    {"hello", "contact", "info", "team", "enquiries", "inquiries", "partnerships", "hi"}
+    {
+        "hello",
+        "contact",
+        "info",
+        "team",
+        "enquiries",
+        "inquiries",
+        "partnerships",
+        "hi",
+        # second pass (10 Nov 2026): other role mailboxes an organisation publishes for the public
+        "support",
+        "sales",
+        "office",
+        "business",
+        "partners",
+        "developers",
+        "devrel",
+        "mail",
+    }
 )
+#: Pages read on an organisation's own site, in order. GET only, same origin only.
+CONTACT_PATHS = ("/security", "/contact", "/contact-us", "/about", "/support")
+_FORM_RE = re.compile(r"<form\b[^>]*>.*?<textarea\b", re.I | re.S)
 EMAIL_RE = re.compile(r"(?<![\w.+-])([A-Za-z0-9][A-Za-z0-9._%+-]{0,63}@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)")
 
 CSV_FIELDS = (
@@ -570,21 +591,31 @@ class Discoverer:
             return []
         return []
 
-    def _website(self, site: str, notes: list[str]) -> list[Found]:
+    def _website(self, site: str, notes: list[str], label: str = "website") -> list[Found]:
         if not site.startswith("https://"):
             return []
         origin = f"https://{urlparse(site).hostname}"
-        for url in dict.fromkeys([site, urljoin(origin, "/security"), urljoin(origin, "/contact")]):
+        form_url = ""
+        for url in dict.fromkeys([site, *(urljoin(origin, p) for p in CONTACT_PATHS)]):
             page = self.fetcher.get(url)
             if page.status != 200 or not page.text:
                 continue
+            if registrable_domain(urlparse(page.final_url).hostname or "") != registrable_domain(
+                urlparse(origin).hostname or ""
+            ):
+                continue  # redirected to another organisation's site: not theirs
             mails = [m.removeprefix("mailto:") for m in re.findall(r"mailto:([^\"'?>\s]+)", page.text, re.I)]
             found = [
-                Found(a, "email", "website", url, self._stamp(), kind)
+                Found(a, "email", label, url, self._stamp(), kind)
                 for a, kind in self._accept(mails + emails_in(page.text))
             ]
             if found:
                 return found
+            if not form_url and url != site and _FORM_RE.search(page.text):
+                form_url = url
+        if form_url and self.segment != "A":
+            # Recorded for a person to use by hand; never submitted by a script, never "eligible".
+            return [Found(form_url, "form", f"{label} contact form", form_url, self._stamp())]
         return []
 
     def discover(self, org: Org, meta: dict[str, dict[str, str]]) -> tuple[list[Found], list[str]]:
@@ -604,6 +635,10 @@ class Discoverer:
                 return found, notes
         for n in names:
             if (site := meta.get(n, {}).get("website")) and (found := self._website(site, notes)):
+                return found, notes
+        if org.domain and not org.github:
+            # No websiteUrl in the registry: the organisation's own domain is still its site.
+            if found := self._website(f"https://{org.domain}/", notes, "website (organisation domain)"):
                 return found, notes
         return [], notes  # never guessed (no RFC 2142 security@<domain>): no published contact
 
@@ -707,7 +742,9 @@ def _raise_deadline(*_: object) -> None:
     raise _Deadline
 
 
-def _discover_with_deadline(disc: "Discoverer", org: "Org", meta: dict[str, dict[str, str]]) -> tuple[list["Found"], list[str]]:
+def _discover_with_deadline(
+    disc: "Discoverer", org: "Org", meta: dict[str, dict[str, str]]
+) -> tuple[list["Found"], list[str]]:
     if not hasattr(signal, "SIGALRM"):  # pragma: no cover - Windows
         return disc.discover(org, meta)
     previous = signal.signal(signal.SIGALRM, _raise_deadline)
@@ -801,7 +838,10 @@ def run(
             eligible = True
             if f.address_kind == "named":
                 row_notes.append("named address published as the security contact (segment A only)")
-            if segment in ("B", "C") and sub != "corporate":
+            if f.contact_type == "form":
+                eligible = False
+                row_notes.append("contact form: by hand only, never scripted")
+            elif segment in ("B", "C") and sub != "corporate":
                 eligible = False
                 row_notes.append("PECR: not a corporate subscriber, no marketing")
             if suppressed(f.contact, org, suppress):
