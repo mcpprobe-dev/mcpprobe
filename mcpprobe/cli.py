@@ -10,6 +10,7 @@ refused, bad arguments).
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from collections.abc import Sequence
 
@@ -297,8 +298,27 @@ def scan_cmd(
         for label, out_path in outputs:
             if out_path:
                 console.print(f"{label}: {out_path}", style="dim", markup=False, highlight=False)
+        if _show_hosted_hint(host, console.is_terminal):
+            for line in HOSTED_HINT:
+                console.print(line, style="dim", markup=False, highlight=False)
     worst = report.max_severity()
     sys.exit(EXIT_FINDINGS if worst is not None and worst >= threshold else EXIT_CLEAN)
+
+
+#: Two dim lines after a scan of a public server, on an interactive terminal only. Text only:
+#: nothing is sent anywhere. Silence it with MCPPROBE_NO_HINT=1; it never shows in CI or with -q.
+HOSTED_HINT = (
+    "Hosted scan with a report you can share: free for one server. Scheduled re-scans and",
+    "change alerts are on the paid plans: https://mcpprobe.tech/app?ref=cli",
+)
+_LOCAL_HOSTS = ("localhost", "127.", "[::1]", "0.0.0.0", "10.", "192.168.")
+
+
+def _show_hosted_hint(host: str, is_terminal: bool) -> bool:
+    """True for an interactive scan of a host the hosted service could reach."""
+    if not host or not is_terminal or os.environ.get("CI") or os.environ.get("MCPPROBE_NO_HINT"):
+        return False
+    return not host.lower().startswith(_LOCAL_HOSTS)
 
 
 @cli.command("checks")

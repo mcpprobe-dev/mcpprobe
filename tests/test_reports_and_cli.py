@@ -408,3 +408,23 @@ async def test_terminal_has_no_chain_line_without_chains(make_server):
     render(report, console, fail_on=Severity.HIGH)
     text = console.export_text()
     assert "Attack chains" not in text and "Result: PASS (nothing at or above high)" in text
+
+
+def test_hosted_hint_only_for_interactive_scans_of_public_hosts(monkeypatch):
+    from mcpprobe.cli import HOSTED_HINT, _show_hosted_hint
+
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("MCPPROBE_NO_HINT", raising=False)
+    assert _show_hosted_hint("mcp.example.com", True)
+    assert not _show_hosted_hint("mcp.example.com", False)  # piped or redirected
+    assert not _show_hosted_hint("", True)  # stdio server
+    for local in ("localhost:8765", "127.0.0.1:8765", "192.168.1.4", "10.0.0.2"):
+        assert not _show_hosted_hint(local, True)
+    monkeypatch.setenv("CI", "true")
+    assert not _show_hosted_hint("mcp.example.com", True)
+    monkeypatch.delenv("CI")
+    monkeypatch.setenv("MCPPROBE_NO_HINT", "1")
+    assert not _show_hosted_hint("mcp.example.com", True)
+    # The wording stays accurate: one server is free, schedules and alerts are paid.
+    text = " ".join(HOSTED_HINT)
+    assert "free for one server" in text and "paid plans" in text and "https://mcpprobe.tech/app" in text

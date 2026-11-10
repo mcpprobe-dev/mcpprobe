@@ -13,6 +13,11 @@ shortened. Still image: [docs/assets/mcpprobe-demo.png](https://raw.githubuserco
 It runs on your machine. There is no account, no API key and no telemetry, and it
 never calls one of your tools.
 
+Prefer not to run it yourself? The hosted service at
+[mcpprobe.tech](https://mcpprobe.tech/app?ref=readme) runs the same checks and gives you a
+report you can share: free for one server. Scheduled re-scans with change alerts are on
+the paid plans.
+
 > **Only scan servers you own or are explicitly authorised to test.**
 > See [Ownership rule](#ownership-rule).
 

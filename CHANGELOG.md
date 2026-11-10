@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- After an interactive scan of a public server, the CLI prints two dim lines pointing to the
+  hosted service. Text only, nothing is sent; never shown in CI, when output is piped, with
+  `-q`, for local or stdio targets, or when `MCPPROBE_NO_HINT=1` is set.
+
 ## [0.3.5] - 2026-11-08
 
 ### Changed
