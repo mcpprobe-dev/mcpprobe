@@ -6,7 +6,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-## [0.3.6] - 2026-11-10
+## [0.3.7] - 2026-11-10
+
+First published release with the change below. The v0.3.6 tag was created before the version
+number was raised, so it failed its release check and was never published to PyPI.
 
 ### Added
 

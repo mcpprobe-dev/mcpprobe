@@ -13,7 +13,7 @@ The package is organised as follows:
 
 from __future__ import annotations
 
-__version__ = "0.3.6"
+__version__ = "0.3.7"
 
 POLICY_URL = "https://mcpprobe.tech/scanning-policy"
 USER_AGENT = f"mcpprobe/{__version__} (+{POLICY_URL})"

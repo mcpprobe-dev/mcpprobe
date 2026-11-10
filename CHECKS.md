@@ -1,6 +1,6 @@
 # mcpprobe checks catalogue
 
-Generated from the check metadata of mcpprobe 0.3.6 (`mcpprobe checks --format markdown`). Do not edit by hand.
+Generated from the check metadata of mcpprobe 0.3.7 (`mcpprobe checks --format markdown`). Do not edit by hand.
 
 Standards: OWASP MCP Top 10 (IDs `MCP0x:2025`, still a beta list, so shown with `(beta)`), OWASP Top 10 for Agentic Applications (`ASI0x`), OWASP Top 10 for LLM Applications 2026 (`LLM0x:2026`, primary) and 2025 (`LLM0x:2025`, kept for one release cycle). Severities are defaults; a check can raise or lower the severity of an individual finding (for example loopback-only servers are reported one level lower), and heuristic checks never rate a finding Critical on their own.
 
