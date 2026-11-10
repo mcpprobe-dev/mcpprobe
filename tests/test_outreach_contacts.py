@@ -427,3 +427,12 @@ def test_website_page_redirected_off_domain_is_ignored():
         "moved.example", "moved.example", False, [oc.Target("mcp.moved.example", "", ["example.moved/x"])]
     )
     assert oc.Discoverer(Redirect({}), segment="B", now=NOW).discover(org, {})[0] == []
+
+
+def test_shard_and_only_orgs_split_a_run_without_overlap(wd):
+    whole, _, _ = run(wd, "B")
+    parts = [run(wd, "B", shard=(k, 2))[0] for k in (0, 1)]
+    assert sorted(r["org"] for p in parts for r in p) == sorted(r["org"] for r in whole)
+    assert not {r["org"] for r in parts[0]} & {r["org"] for r in parts[1]}
+    only, _, _ = run(wd, "B", only_orgs={"widgets.example"})
+    assert [r["org"] for r in only] == ["widgets.example"]

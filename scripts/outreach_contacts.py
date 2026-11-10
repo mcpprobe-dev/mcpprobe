@@ -769,6 +769,9 @@ def run(
     extra_platforms: Iterable[str] = (),
     limit: int | None = None,
     p4_hand_check: Path | None = None,
+    shard: tuple[int, int] | None = None,
+    only_orgs: set[str] | None = None,
+    progress: bool = False,
 ) -> tuple[list[dict[str, str]], dict[str, int]]:
     now = now or datetime.now(UTC)
     priorities = tuple(priorities)
@@ -803,6 +806,12 @@ def run(
     for i, org in enumerate(
         sorted(orgs.values(), key=lambda o: (min((t.priority or "P9") for t in o.hosts), o.key))
     ):
+        if shard and i % shard[1] != shard[0]:
+            continue  # another process has this slice
+        if only_orgs is not None and org.key not in only_orgs:
+            continue
+        if progress and i % 25 == 0:
+            print("progress", i, len(orgs), file=sys.stderr, flush=True)
         if limit is not None and i >= limit:
             break
         found, notes = _discover_with_deadline(disc, org, meta)
@@ -909,6 +918,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--platform-suffix", action="append", default=[], help="Extra shared-hosting suffix")
     ap.add_argument("--limit", type=int, help="Stop after N organisations")
+    ap.add_argument(
+        "--shard", help="K/N: take every Nth organisation starting at K, to run N processes side by side"
+    )
+    ap.add_argument("--only-orgs", type=Path, help="File of organisation keys, one per line; skip all others")
+    ap.add_argument(
+        "--progress", action="store_true", help="Print a progress line to stderr every 25 organisations"
+    )
     args = ap.parse_args(argv)
     if args.dry_run and not args.fixtures:
         ap.error("--dry-run needs --fixtures")
@@ -924,6 +940,11 @@ def main(argv: list[str] | None = None) -> int:
         extra_platforms=args.platform_suffix,
         limit=args.limit,
         p4_hand_check=args.p4_hand_check,
+        shard=tuple(int(x) for x in args.shard.split("/", 1)) if args.shard else None,  # type: ignore[arg-type]
+        only_orgs={x.strip() for x in args.only_orgs.read_text().splitlines() if x.strip()}
+        if args.only_orgs
+        else None,
+        progress=args.progress,
     )
     write_csv(rows, args.out)
     print(json.dumps({"segment": args.segment, "out": str(args.out), **stats}, indent=2), file=sys.stderr)
