@@ -734,24 +734,24 @@ def p4_gate(wd: WorkDir, hand_check: Path | None) -> tuple[int, int]:
 ORG_DEADLINE_S = 120
 
 
-class _Deadline(Exception):
+class _DeadlineError(Exception):
     pass
 
 
 def _raise_deadline(*_: object) -> None:
-    raise _Deadline
+    raise _DeadlineError
 
 
 def _discover_with_deadline(
-    disc: "Discoverer", org: "Org", meta: dict[str, dict[str, str]]
-) -> tuple[list["Found"], list[str]]:
+    disc: Discoverer, org: Org, meta: dict[str, dict[str, str]]
+) -> tuple[list[Found], list[str]]:
     if not hasattr(signal, "SIGALRM"):  # pragma: no cover - Windows
         return disc.discover(org, meta)
     previous = signal.signal(signal.SIGALRM, _raise_deadline)
     signal.alarm(ORG_DEADLINE_S)
     try:
         return disc.discover(org, meta)
-    except _Deadline:
+    except _DeadlineError:
         return [], [f"discovery abandoned after {ORG_DEADLINE_S}s"]
     finally:
         signal.alarm(0)

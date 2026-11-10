@@ -362,7 +362,7 @@ def test_security_txt_rules():
 def test_discover_deadline_abandons_a_hanging_org(monkeypatch):
     class Hang:
         def discover(self, org, meta):
-            raise oc._Deadline
+            raise oc._DeadlineError
 
     found, notes = oc._discover_with_deadline(Hang(), None, {})
     assert found == [] and notes and "abandoned" in notes[0]
