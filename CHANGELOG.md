@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-11-10
+
 ### Added
 
 - After an interactive scan of a public server, the CLI prints two dim lines pointing to the
