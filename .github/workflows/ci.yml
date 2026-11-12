@@ -58,7 +58,8 @@ jobs:
           /tmp/venv/bin/pip install dist/*.whl
           /tmp/venv/bin/mcpprobe --help
           python -m tests.fake_server --preset vulnerable --port 8765 &
-          sleep 1
+          # wait until the fake server accepts connections (a fixed sleep raced on slow runners)
+          for i in $(seq 1 30); do (echo > /dev/tcp/127.0.0.1/8765) 2>/dev/null && break; sleep 0.5; done
           set +e
           /tmp/venv/bin/mcpprobe http://127.0.0.1:8765/mcp --sarif smoke.sarif
           code=$?
@@ -66,7 +67,8 @@ jobs:
           test "$code" = "1"   # the fake server is deliberately vulnerable
           test -s smoke.sarif
           python -m tests.fake_server --preset html --port 8766 &
-          sleep 1
+          # wait until the fake server accepts connections (a fixed sleep raced on slow runners)
+          for i in $(seq 1 30); do (echo > /dev/tcp/127.0.0.1/8766) 2>/dev/null && break; sleep 0.5; done
           set +e
           /tmp/venv/bin/mcpprobe http://127.0.0.1:8766/ --json notmcp.json
           code=$?
@@ -91,7 +93,8 @@ jobs:
       - name: Run image against the fake server
         run: |
           python -m tests.fake_server --preset vulnerable --port 8765 &
-          sleep 1
+          # wait until the fake server accepts connections (a fixed sleep raced on slow runners)
+          for i in $(seq 1 30); do (echo > /dev/tcp/127.0.0.1/8765) 2>/dev/null && break; sleep 0.5; done
           set +e
           docker run --rm --network host -v "$PWD:/github/workspace" -w /github/workspace \
             -e INPUT_TARGET=http://127.0.0.1:8765/mcp -e INPUT_SARIF-OUTPUT=action.sarif \
