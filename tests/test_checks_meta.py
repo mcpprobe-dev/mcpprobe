@@ -53,6 +53,30 @@ def test_meta01_zero_width_and_bidi_and_tags():
     assert ind and ind[0].severity == Severity.HIGH and ind[0].confidence == Confidence.HIGH
 
 
+def test_meta01_ordinary_joiners_are_not_invisible_content():
+    # Persian "half-space": U+200C between two Arabic-script letters is standard spelling.
+    persian = "محاسبه\u200cگر مهریه: می\u200cتوانید مبلغ را حساب کنید"
+    assert find_invisible_unicode(persian) == {}
+    # Devanagari conjunct control with U+200D.
+    assert find_invisible_unicode("क्\u200dष") == {}
+    # Emoji ZWJ sequences: woman technologist, and one with a skin tone and a variation selector.
+    assert find_invisible_unicode("Counts graphemes, e.g. \U0001f469\u200d\U0001f4bb is one") == {}
+    assert find_invisible_unicode("\U0001f575\U0001f3fd\ufe0f\u200d\u2640\ufe0f") == {}
+    assert "invisible_unicode" not in kinds(persian)
+
+
+def test_meta01_joiners_used_to_hide_content_are_still_reported():
+    # Between Latin letters, in a run, at a word edge, or next to only one emoji: all still count.
+    assert find_invisible_unicode("ig\u200cnore") == {"zero_width": 1}
+    assert find_invisible_unicode("pass\u200dword") == {"zero_width": 1}
+    assert find_invisible_unicode("می\u200c\u200c\u200cتوانید") == {"zero_width": 3}
+    assert find_invisible_unicode("کلمه\u200c end") == {"zero_width": 1}
+    assert find_invisible_unicode("\U0001f469\u200dx") == {"zero_width": 1}
+    assert find_invisible_unicode("\u200d\U0001f4bb") == {"zero_width": 1}
+    # A zero-width space is never orthographic, whatever surrounds it.
+    assert find_invisible_unicode("می\u200bتوانید") == {"zero_width": 1}
+
+
 def test_meta01_homoglyph_mixed_script():
     # Cyrillic 'а' (U+0430) inside a Latin word.
     assert find_mixed_script_words("please pаypal now") == ["pаypal"]

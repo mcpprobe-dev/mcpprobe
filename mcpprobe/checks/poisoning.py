@@ -291,11 +291,54 @@ def find_mixed_script_words(text: str) -> list[str]:
     return out[:10]
 
 
+_ZWNJ, _ZWJ = 0x200C, 0x200D
+# Scripts whose normal spelling uses ZWNJ/ZWJ between letters: Arabic script (Persian, Urdu,
+# Kurdish write a "half-space" with U+200C) and the Indic scripts from Devanagari to Sinhala.
+_JOINER_SCRIPTS = (
+    (0x0600, 0x06FF),
+    (0x0750, 0x077F),
+    (0x08A0, 0x08FF),
+    (0xFB50, 0xFDFF),
+    (0xFE70, 0xFEFE),
+    (0x0900, 0x0DFF),
+)
+# Code points that take part in emoji ZWJ sequences (U+1F469 U+200D U+1F4BB, "woman technologist").
+_EMOJI = ((0x1F000, 0x1FAFF), (0x2600, 0x27BF), (0x2B00, 0x2BFF), (0x2300, 0x23FF), (0x2190, 0x21FF))
+_EMOJI_TRAILERS = {0xFE0F} | set(range(0x1F3FB, 0x1F400))  # variation selector, skin tones
+
+
+def _in(cp: int, ranges: tuple[tuple[int, int], ...]) -> bool:
+    return any(lo <= cp <= hi for lo, hi in ranges)
+
+
+def _is_orthographic_joiner(text: str, i: int) -> bool:
+    """True when the ZWNJ/ZWJ at ``i`` is ordinary writing, not hidden content.
+
+    Two cases only, both needing a real character on each side (so a run of zero-width
+    characters, or one at the edge of a word, is still reported):
+    a joiner between two letters of a script that spells with them, and a ZWJ joining two emoji.
+    """
+    if i == 0 or i + 1 >= len(text):
+        return False
+    nxt = ord(text[i + 1])
+    j = i - 1
+    while j > 0 and (ord(text[j]) in _EMOJI_TRAILERS or unicodedata.combining(text[j])):
+        j -= 1
+    prev = ord(text[j])
+    if _in(prev, _JOINER_SCRIPTS) and _in(nxt, _JOINER_SCRIPTS):
+        return unicodedata.category(text[j]).startswith("L") and unicodedata.category(text[i + 1]).startswith(
+            "L"
+        )
+    return ord(text[i]) == _ZWJ and _in(prev, _EMOJI) and _in(nxt, _EMOJI)
+
+
 def find_invisible_unicode(text: str) -> dict[str, int]:
     counts = {"zero_width": 0, "bidi_control": 0, "tag_characters": 0}
-    for ch in text:
+    for i, ch in enumerate(text):
         cp = ord(ch)
         if cp in _ZERO_WIDTH:
+            if cp in (_ZWNJ, _ZWJ) and _is_orthographic_joiner(text, i):
+                continue
             counts["zero_width"] += 1
         elif cp in _BIDI:
             counts["bidi_control"] += 1
@@ -585,6 +628,8 @@ class Meta01ToolDescriptionPoisoning(Check):
         "Legitimate text that claims precedence over every other tool ('call this before any other "
         "tool whenever...') is reported at medium. Plain URLs, sibling-tool mentions and usage "
         "guidance are not reported; a credential path without a read/send verb is low. "
+        "U+200C/U+200D are not counted where they are ordinary spelling: between two letters of "
+        "Arabic-script or Indic text (the Persian half-space) and inside emoji joiner sequences. "
         "Review the matched excerpts; a second-opinion judge can be plugged in through the Python API (ScanOptions.judge); mcpprobe itself makes no LLM calls."
     )
     fix = (

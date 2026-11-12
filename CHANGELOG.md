@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.8] - 2026-11-12
+
+### Fixed
+
+- META-01 no longer reports U+200C (zero-width non-joiner) and U+200D (zero-width joiner) as
+  invisible content where they are ordinary writing: between two letters of Arabic-script or
+  Indic text (the Persian "half-space"), and between two emoji in a joiner sequence such as
+  the woman-technologist emoji. They are still reported between Latin letters, in runs, at the
+  edge of a word, and next to only one emoji; every other zero-width, direction-control and
+  tag character is reported as before. Reported by two server operators.
+
 ## [0.3.7] - 2026-11-10
 
 First published release with the change below. The v0.3.6 tag was created before the version
